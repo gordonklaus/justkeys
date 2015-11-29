@@ -3,7 +3,7 @@ package main
 import (
 	"math"
 
-	"code.google.com/p/gordon-go/audio"
+	"github.com/gordonklaus/audio"
 )
 
 var tones Tones

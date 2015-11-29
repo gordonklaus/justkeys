@@ -7,7 +7,7 @@ import (
 	"sort"
 	"time"
 
-	"code.google.com/p/gordon-go/audio"
+	"github.com/gordonklaus/audio"
 
 	"golang.org/x/mobile/f32"
 	"golang.org/x/mobile/geom"
