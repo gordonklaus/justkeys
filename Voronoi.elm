@@ -7,6 +7,7 @@ module Voronoi
         )
 
 import Heap
+import RefMap exposing (RefID, RefMap)
 
 
 type alias Diagram =
@@ -30,14 +31,20 @@ compute sites =
         Nothing ->
             { cells = [] }
 
-        -- impossible, but satisfy the checker.  TODO: crash?
         Just ( VertexEvent _, _ ) ->
-            { cells = [] }
+            Debug.crash "unreachable"
 
         Just ( SiteEvent p, events ) ->
+            let
+                beachListNode =
+                    BeachListNode p Nothing Nothing
+
+                ( beachListNodeID, beachList ) =
+                    RefMap.put beachListNode RefMap.empty
+            in
             computeRecurse
                 { events = events
-                , beach = BeachArc p
+                , beach = { tree = BeachTreeArc p, list = beachList }
                 , diagram = { cells = [] }
                 }
 
@@ -49,10 +56,14 @@ computeRecurse state =
             state.diagram
 
         Just ( SiteEvent p, events ) ->
-            computeRecurse (State events (insertArc p state.beach) state.diagram)
+            let
+                ( beach, q ) =
+                    insertArc p state.beach
+            in
+            computeRecurse (State events beach state.diagram)
 
         Just ( VertexEvent v, events ) ->
-            computeRecurse (State events (removeArc v state.beach) state.diagram)
+            computeRecurse (State events { tree = removeArc v (assertEdge state.beach.tree), list = state.beach.list } state.diagram)
 
 
 type alias State =
@@ -86,75 +97,121 @@ eventY e =
             v.y
 
 
-type Beach
-    = BeachEdge Point Point Beach Beach
-    | BeachArc Point
+type alias Beach =
+    { tree : BeachTree
+    , list : RefMap BeachListNode
+    }
 
 
-insertArc : Point -> Beach -> Beach
+type BeachTree
+    = BeachTreeEdge BeachTreeEdgeRecord
+    | BeachTreeArc Point
+
+
+type alias BeachTreeEdgeRecord =
+    { pLeft : Point
+    , pRight : Point
+    , left : BeachTree
+    , right : BeachTree
+    }
+
+
+type alias BeachListNode =
+    { p : Point
+    , left : Maybe BeachListNodeID
+    , right : Maybe BeachListNodeID
+    }
+
+
+type BeachListNodeID
+    = BeachListNodeID (RefID BeachListNode)
+
+
+insertArc : Point -> Beach -> ( Beach, Point )
 insertArc site beach =
-    case beach of
-        BeachArc p ->
-            BeachEdge
-                p
-                site
-                (BeachArc p)
-                (BeachEdge
-                    site
-                    p
-                    (BeachArc site)
-                    (BeachArc p)
-                )
+    case beach.tree of
+        BeachTreeArc p ->
+            let
+                tree =
+                    BeachTreeEdge
+                        { pLeft = p
+                        , pRight = site
+                        , left = BeachTreeArc p
+                        , right =
+                            BeachTreeEdge
+                                { pLeft = site
+                                , pRight = p
+                                , left = BeachTreeArc site
+                                , right = BeachTreeArc p
+                                }
+                        }
+            in
+            ( { beach | tree = tree }, p )
 
-        BeachEdge pLeft pRight left right ->
-            if site.x < edgeX site.y pLeft pRight then
-                BeachEdge pLeft pRight (insertArc site left) right
+        BeachTreeEdge edge ->
+            if site.x < edgeX site.y edge.pLeft edge.pRight then
+                applyLeft (insertArc site) edge beach.list
             else
-                BeachEdge pLeft pRight left (insertArc site right)
+                let
+                    ( beach_, split ) =
+                        insertArc site { beach | tree = edge.right }
+                in
+                ( { beach_ | tree = BeachTreeEdge { edge | right = beach_.tree } }, split )
 
 
-removeArc : Vertex -> Beach -> Beach
-removeArc v beach =
-    case beach of
-        -- impossible, but satisfy the checker.  TODO: crash?
-        BeachArc p ->
-            BeachArc p
+applyLeft : (Beach -> ( Beach, Point )) -> BeachTreeEdgeRecord -> RefMap BeachListNode -> ( Beach, Point )
+applyLeft f edge list =
+    let
+        ( beach_, split ) =
+            f { tree = edge.left, list = list }
+    in
+    ( { beach_ | tree = BeachTreeEdge { edge | left = beach_.tree } }, split )
 
-        BeachEdge pLeft pRight left right ->
-            if ( pLeft, pRight ) == ( v.left, v.middle ) then
-                BeachEdge pLeft v.right left (removeLeftArc right)
-            else if ( pLeft, pRight ) == ( v.middle, v.right ) then
-                BeachEdge v.left pRight (removeRightArc left) right
-            else if v.circumCenter.x < edgeX v.y pLeft pRight then
-                BeachEdge pLeft pRight (removeArc v left) right
+
+removeArc : Vertex -> BeachTreeEdgeRecord -> BeachTree
+removeArc v edge =
+    let
+        edge_ =
+            if ( edge.pLeft, edge.pRight ) == ( v.left, v.middle ) then
+                { edge | pRight = v.right, right = removeLeftArc (assertEdge edge.right) }
+            else if ( edge.pLeft, edge.pRight ) == ( v.middle, v.right ) then
+                { edge | pLeft = v.left, left = removeRightArc (assertEdge edge.left) }
+            else if v.circumCenter.x < edgeX v.y edge.pLeft edge.pRight then
+                { edge | left = removeArc v (assertEdge edge.left) }
             else
-                BeachEdge pLeft pRight left (removeArc v right)
+                { edge | right = removeArc v (assertEdge edge.right) }
+    in
+    BeachTreeEdge edge_
 
 
-removeLeftArc : Beach -> Beach
-removeLeftArc beach =
-    case beach of
-        BeachArc p ->
-            BeachArc p
-
-        BeachEdge _ _ (BeachArc _) right ->
+removeLeftArc : BeachTreeEdgeRecord -> BeachTree
+removeLeftArc { left, right } =
+    case left of
+        BeachTreeArc _ ->
             right
 
-        BeachEdge pLeft pRight left right ->
-            BeachEdge pLeft pRight (removeLeftArc left) right
+        BeachTreeEdge edge ->
+            removeLeftArc edge
 
 
-removeRightArc : Beach -> Beach
-removeRightArc beach =
-    case beach of
-        BeachArc p ->
-            BeachArc p
-
-        BeachEdge _ _ left (BeachArc _) ->
+removeRightArc : BeachTreeEdgeRecord -> BeachTree
+removeRightArc { left, right } =
+    case right of
+        BeachTreeArc _ ->
             left
 
-        BeachEdge pLeft pRight left right ->
-            BeachEdge pLeft pRight left (removeRightArc right)
+        BeachTreeEdge edge ->
+            removeRightArc edge
+
+
+assertEdge : BeachTree -> BeachTreeEdgeRecord
+assertEdge beach =
+    case beach of
+        BeachTreeArc _ ->
+            Debug.crash "unreachable"
+
+        BeachTreeEdge edge ->
+            edge
 
 
 edgeX y p1 p2 =
