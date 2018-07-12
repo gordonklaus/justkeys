@@ -44,7 +44,7 @@ compute sites =
             in
             computeRecurse
                 { events = events
-                , beach = { tree = BeachTreeArc p, list = beachList }
+                , beach = { tree = BeachTreeArc beachListNodeID, list = beachList }
                 , diagram = { cells = [] }
                 }
 
@@ -57,13 +57,41 @@ computeRecurse state =
 
         Just ( SiteEvent p, events ) ->
             let
-                ( beach, q ) =
+                ( beach, qID ) =
                     insertArc p state.beach
+
+                q =
+                    RefMap.get qID beach.list
+
+                getRef =
+                    flip RefMap.get beach.list
+
+                left =
+                    Maybe.map getRef q.left
+
+                right =
+                    Maybe.map getRef q.right
+
+                events2 =
+                    [ Maybe.map2 (\left right -> deleteEvent ( left.p, q.p, right.p )) left right
+                    , Maybe.map (\left -> pushEvent ( left, q.p, p )) left
+                    , Maybe.map (\right -> pushEvent ( p, q.p, right )) right
+                    ]
+                        |> List.filterMap identity
+                        |> List.foldl (<|) events
             in
-            computeRecurse (State events beach state.diagram)
+            computeRecurse (State events2 beach state.diagram)
 
         Just ( VertexEvent v, events ) ->
             computeRecurse (State events { tree = removeArc v (assertEdge state.beach.tree), list = state.beach.list } state.diagram)
+
+
+deleteEvent e events =
+    events
+
+
+pushEvent e events =
+    events
 
 
 type alias State =
@@ -105,7 +133,7 @@ type alias Beach =
 
 type BeachTree
     = BeachTreeEdge BeachTreeEdgeRecord
-    | BeachTreeArc Point
+    | BeachTreeArc BeachListNodeID
 
 
 type alias BeachTreeEdgeRecord =
@@ -123,30 +151,51 @@ type alias BeachListNode =
     }
 
 
-type BeachListNodeID
-    = BeachListNodeID (RefID BeachListNode)
+type alias BeachListNodeID =
+    RefID
 
 
-insertArc : Point -> Beach -> ( Beach, Point )
+insertArc : Point -> Beach -> ( Beach, BeachListNodeID )
 insertArc site beach =
     case beach.tree of
-        BeachTreeArc p ->
+        BeachTreeArc pID ->
             let
+                old =
+                    RefMap.get pID beach.list
+
+                ( newID, list2 ) =
+                    RefMap.put { p = site, left = Nothing, right = Nothing } beach.list
+
+                ( leftID, list3 ) =
+                    RefMap.put { p = old.p, left = old.left, right = Just newID } list2
+
+                ( rightID, list4 ) =
+                    RefMap.put { p = old.p, left = Just newID, right = old.right } list3
+
+                list5 =
+                    RefMap.set newID { p = site, left = Just leftID, right = Just rightID } list4
+
+                list6 =
+                    Maybe.withDefault identity (Maybe.map (\id -> RefMap.update id (\n -> { n | right = Just leftID })) old.left) list5
+
+                list7 =
+                    Maybe.withDefault identity (Maybe.map (\id -> RefMap.update id (\n -> { n | left = Just rightID })) old.right) list6
+
                 tree =
                     BeachTreeEdge
-                        { pLeft = p
+                        { pLeft = old.p
                         , pRight = site
-                        , left = BeachTreeArc p
+                        , left = BeachTreeArc leftID
                         , right =
                             BeachTreeEdge
                                 { pLeft = site
-                                , pRight = p
-                                , left = BeachTreeArc site
-                                , right = BeachTreeArc p
+                                , pRight = old.p
+                                , left = BeachTreeArc newID
+                                , right = BeachTreeArc rightID
                                 }
                         }
             in
-            ( { beach | tree = tree }, p )
+            ( { tree = tree, list = list7 }, pID )
 
         BeachTreeEdge edge ->
             if site.x < edgeX site.y edge.pLeft edge.pRight then
@@ -159,7 +208,7 @@ insertArc site beach =
                 ( { beach_ | tree = BeachTreeEdge { edge | right = beach_.tree } }, split )
 
 
-applyLeft : (Beach -> ( Beach, Point )) -> BeachTreeEdgeRecord -> RefMap BeachListNode -> ( Beach, Point )
+applyLeft : (Beach -> ( Beach, BeachListNodeID )) -> BeachTreeEdgeRecord -> RefMap BeachListNode -> ( Beach, BeachListNodeID )
 applyLeft f edge list =
     let
         ( beach_, split ) =
