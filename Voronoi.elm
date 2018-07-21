@@ -44,7 +44,7 @@ compute sites =
             in
             computeRecurse
                 { events = events
-                , beach = { tree = BeachTreeArc beachListNodeID, list = beachList }
+                , beach = { tree = BeachTreeArc beachListNodeID, list = { nodes = beachList } }
                 , diagram = { cells = [] }
                 }
 
@@ -61,10 +61,10 @@ computeRecurse state =
                     insertArc p state.beach
 
                 q =
-                    RefMap.get qID beach.list
+                    RefMap.get qID beach.list.nodes
 
                 getRef =
-                    flip RefMap.get beach.list
+                    flip RefMap.get beach.list.nodes
 
                 left =
                     Maybe.map getRef q.left
@@ -127,7 +127,7 @@ eventY e =
 
 type alias Beach =
     { tree : BeachTree
-    , list : RefMap BeachListNode
+    , list : BeachList
     }
 
 
@@ -142,6 +142,10 @@ type alias BeachTreeEdgeRecord =
     , left : BeachTree
     , right : BeachTree
     }
+
+
+type alias BeachList =
+    { nodes : RefMap BeachListNode }
 
 
 type alias BeachListNode =
@@ -161,25 +165,16 @@ insertArc site beach =
         BeachTreeArc pID ->
             let
                 old =
-                    RefMap.get pID beach.list
+                    RefMap.get pID beach.list.nodes
 
                 ( newID, list2 ) =
-                    RefMap.put { p = site, left = Nothing, right = Nothing } beach.list
+                    replace pID site beach.list
 
                 ( leftID, list3 ) =
-                    RefMap.put { p = old.p, left = old.left, right = Just newID } list2
+                    insertLeft newID old.p list2
 
                 ( rightID, list4 ) =
-                    RefMap.put { p = old.p, left = Just newID, right = old.right } list3
-
-                list5 =
-                    RefMap.set newID { p = site, left = Just leftID, right = Just rightID } list4
-
-                list6 =
-                    Maybe.withDefault identity (Maybe.map (\id -> RefMap.update id (\n -> { n | right = Just leftID })) old.left) list5
-
-                list7 =
-                    Maybe.withDefault identity (Maybe.map (\id -> RefMap.update id (\n -> { n | left = Just rightID })) old.right) list6
+                    insertRight newID old.p list3
 
                 tree =
                     BeachTreeEdge
@@ -195,7 +190,7 @@ insertArc site beach =
                                 }
                         }
             in
-            ( { tree = tree, list = list7 }, pID )
+            ( { tree = tree, list = list4 }, pID )
 
         BeachTreeEdge edge ->
             if site.x < edgeX site.y edge.pLeft edge.pRight then
@@ -208,7 +203,81 @@ insertArc site beach =
                 ( { beach_ | tree = BeachTreeEdge { edge | right = beach_.tree } }, split )
 
 
-applyLeft : (Beach -> ( Beach, BeachListNodeID )) -> BeachTreeEdgeRecord -> RefMap BeachListNode -> ( Beach, BeachListNodeID )
+replace : BeachListNodeID -> Point -> BeachList -> ( BeachListNodeID, BeachList )
+replace id p { nodes } =
+    let
+        old =
+            RefMap.get id nodes
+
+        ( newID, nodes2 ) =
+            RefMap.put { old | p = p } nodes
+
+        list =
+            setRight old.left newID { nodes = nodes2 }
+
+        list2 =
+            setLeft old.right newID list
+
+        -- TODO: delete old
+    in
+    ( newID, list2 )
+
+
+insertLeft : BeachListNodeID -> Point -> BeachList -> ( BeachListNodeID, BeachList )
+insertLeft id p { nodes } =
+    let
+        left =
+            (RefMap.get id nodes).left
+
+        ( newID, nodes2 ) =
+            RefMap.put { p = p, left = left, right = Just id } nodes
+
+        list =
+            setRight left newID { nodes = nodes2 }
+
+        list2 =
+            setLeft (Just id) newID list
+    in
+    ( newID, list2 )
+
+
+insertRight : BeachListNodeID -> Point -> BeachList -> ( BeachListNodeID, BeachList )
+insertRight id p { nodes } =
+    let
+        right =
+            (RefMap.get id nodes).right
+
+        ( newID, nodes2 ) =
+            RefMap.put { p = p, left = Just id, right = right } nodes
+
+        list =
+            setLeft right newID { nodes = nodes2 }
+
+        list2 =
+            setRight (Just id) newID list
+    in
+    ( newID, list2 )
+
+
+setLeft : Maybe BeachListNodeID -> BeachListNodeID -> BeachList -> BeachList
+setLeft id left { nodes } =
+    let
+        nodes2 =
+            Maybe.withDefault identity (Maybe.map (\id -> RefMap.update id (\n -> { n | left = Just left })) id) nodes
+    in
+    { nodes = nodes2 }
+
+
+setRight : Maybe BeachListNodeID -> BeachListNodeID -> BeachList -> BeachList
+setRight id right { nodes } =
+    let
+        nodes2 =
+            Maybe.withDefault identity (Maybe.map (\id -> RefMap.update id (\n -> { n | right = Just right })) id) nodes
+    in
+    { nodes = nodes2 }
+
+
+applyLeft : (Beach -> ( Beach, BeachListNodeID )) -> BeachTreeEdgeRecord -> BeachList -> ( Beach, BeachListNodeID )
 applyLeft f edge list =
     let
         ( beach_, split ) =
