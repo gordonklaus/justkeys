@@ -3,153 +3,133 @@ package main
 import (
 	"log"
 	"math"
+	"time"
 
 	"golang.org/x/mobile/app"
-	"golang.org/x/mobile/event"
-	"golang.org/x/mobile/geom"
+	"golang.org/x/mobile/event/lifecycle"
+	"golang.org/x/mobile/event/paint"
+	"golang.org/x/mobile/event/size"
+	"golang.org/x/mobile/event/touch"
 	"golang.org/x/mobile/gl"
 )
 
-var (
-	print   = log.Print
-	printf  = log.Printf
-	println = log.Println
+const (
+	tonicPitch            = 8
+	harmonicAmplitudeBase = .88
+	numHarmonics          = 12
 )
 
-var (
-	pressed   = map[event.TouchSequenceID]key{}
-	scrollLoc = map[event.TouchSequenceID]geom.Pt{}
-	// fingers Fingers
-)
+type harmonic struct {
+	ratio, pitch, amplitude float64
+}
+
+var harmonics []harmonic
+
+func init() {
+	for i := 1.0; i <= numHarmonics; i++ {
+		harmonics = append(harmonics, harmonic{
+			ratio:     i,
+			pitch:     math.Log2(i),
+			amplitude: math.Pow(harmonicAmplitudeBase, i) * (1 - harmonicAmplitudeBase),
+		})
+	}
+}
+
+func totalDissonance(pitch float64, playingPitches []float64) float64 {
+	d := 0.0
+	for _, playing := range playingPitches {
+		for _, h1 := range harmonics {
+			for _, h2 := range harmonics {
+				d += beatAmplitude(h1.amplitude, h2.amplitude) * dissonance(h1.amplitude, h2.amplitude, playing+h1.pitch, pitch+h2.pitch)
+			}
+		}
+	}
+	return d
+}
 
 func main() {
-	app.Run(app.Callbacks{
-		Start: start,
-		Stop:  stop,
-		Touch: touch,
-		Draw:  draw,
+	app.Main(func(a app.App) {
+		var (
+			glctx gl.Context
+			sz    size.Event
+		)
+
+		repaint := make(chan struct{}, 1)
+		go func() {
+			for range repaint {
+				a.Send(paint.Event{})
+				time.Sleep(time.Second / 60)
+			}
+		}()
+
+		for e := range a.Events() {
+			switch e := a.Filter(e).(type) {
+			case lifecycle.Event:
+				switch e.Crosses(lifecycle.StageVisible) {
+				case lifecycle.CrossOn:
+					glctx, _ = e.DrawContext.(gl.Context)
+					onStart(glctx, sz)
+					a.Send(paint.Event{})
+				case lifecycle.CrossOff:
+					onStop(glctx)
+					glctx = nil
+				}
+			case size.Event:
+				sz = e
+				if program != nil {
+					program.Size(sz.Size())
+				}
+			case paint.Event:
+				if glctx == nil {
+					continue
+				}
+
+				onPaint(glctx, sz)
+				a.Publish()
+			case touch.Event:
+				clipX := 2*e.X/float32(sz.WidthPx) - 1
+				clipY := 1 - 2*e.Y/float32(sz.HeightPx)
+				e.X, e.Y = program.Clip2World(clipX, clipY)
+
+				keys.Touch(e)
+
+				select {
+				case repaint <- struct{}{}:
+				default:
+				}
+			}
+		}
 	})
 }
 
-func start() {
-	initKeys()
-	startAudio()
-}
+var (
+	program *Program
+	keys    *Keys
+)
 
-func stop() {
-	stopAudio()
-
-	gl.DeleteProgram(program)
-	gl.DeleteBuffer(positionbuf)
-	gl.DeleteBuffer(pointsizebuf)
-}
-
-func touch(t event.Touch) {
-	// finger := fingers.touch(t)
-
-	if t.Type == event.TouchStart && t.Loc.Y < 8 {
-		scrollLoc[t.ID] = t.Loc.X
-	}
-	if _, ok := scrollLoc[t.ID]; ok {
-		avg0, stddev0 := scrollStats()
-		scrollLoc[t.ID] = t.Loc.X
-		avg1, stddev1 := scrollStats()
-		scale := 1.0
-		if stddev0 > 0 && stddev1 > 0 {
-			scale = float64(stddev1 / stddev0)
-		}
-		pitchOffset -= pitchRange * float64((avg1/geom.Pt(scale)-avg0)/geom.Width)
-		pitchRange /= scale
-		updateProjectionMatrix()
-		if t.Type == event.TouchEnd {
-			delete(scrollLoc, t.ID)
-		}
+func onStart(glctx gl.Context, sz size.Event) {
+	var err error
+	program, err = NewProgram(glctx, sz.Size())
+	if err != nil {
+		log.Printf("error creating GL program: %v", err)
 		return
 	}
 
-	if t.Type == event.TouchStart {
-		if k := nearestKey(t.Loc); k != nil {
-			pressed[t.ID] = k
-		}
-	}
-	if k := pressed[t.ID]; k != nil {
-		switch t.Type {
-		case event.TouchStart:
-			k.press(t.Loc)
-		case event.TouchMove:
-			k.move(t.Loc)
-		case event.TouchEnd:
-			k.release(t.Loc)
-			delete(pressed, t.ID)
-		}
-	}
+	keys = NewKeys(glctx, program)
+
+	startAudio()
 }
 
-func scrollStats() (avg, stddev geom.Pt) {
-	n := geom.Pt(len(scrollLoc))
-	for _, x := range scrollLoc {
-		avg += x
-	}
-	avg /= n
-	for _, x := range scrollLoc {
-		stddev += (x - avg) * (x - avg)
-	}
-	return avg, geom.Pt(math.Sqrt(float64(stddev / n)))
+func onStop(glctx gl.Context) {
+	stopAudio()
+
+	keys.Release()
+	program.Release()
 }
 
-func nearestKey(loc geom.Point) key {
-	var key key
-	dist := geom.Pt(math.MaxFloat32)
-	for _, k := range keys {
-		kb := k.base()
-		dx := geom.Pt((kb.pitch-pitchOffset)/pitchRange)*geom.Width - loc.X
-		dy := geom.Pt(1-kb.y)*geom.Height - loc.Y
-		d := geom.Pt(math.Hypot(float64(dx), float64(dy)))
-		if d < dist && d < geom.Pt(math.Max(8, kb.size/float64(geom.PixelsPerPt))) {
-			dist = d
-			key = k
-		}
-	}
-	return key
-}
+func onPaint(glctx gl.Context, sz size.Event) {
+	glctx.ClearColor(0, 0, 0, 1)
+	glctx.Clear(gl.COLOR_BUFFER_BIT)
 
-func draw() {
-	gl.ClearColor(0, 0, 0, 1)
-	gl.Clear(gl.COLOR_BUFFER_BIT)
-	drawKeys()
+	keys.Draw()
 }
-
-// type Fingers struct {
-// 	fingers []*finger
-// }
-//
-// func (f *Fingers) touch(t event.Touch) *finger {
-// 	if t.Type == event.TouchStart {
-// 		finger := &finger{t.Loc}
-// 		f.fingers = append(f.fingers, finger)
-// 		return finger
-// 	}
-// 	index := 0
-// 	dist := geom.Pt(math.MaxFloat32)
-// 	for i, finger := range f.fingers {
-// 		dx := finger.loc.X - t.Loc.X
-// 		dy := finger.loc.Y - t.Loc.Y
-// 		d := dx*dx + dy*dy
-// 		if d < dist {
-// 			index = i
-// 			dist = d
-// 		}
-// 	}
-// 	finger := f.fingers[index]
-// 	finger.loc = t.Loc
-// 	if t.Type == event.TouchEnd {
-// 		n := len(f.fingers)
-// 		f.fingers[index] = f.fingers[n-1]
-// 		f.fingers = f.fingers[:n-1]
-// 	}
-// 	return finger
-// }
-//
-// type finger struct {
-// 	loc geom.Point
-// }

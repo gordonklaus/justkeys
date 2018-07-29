@@ -2,22 +2,18 @@ package main
 
 import (
 	"math"
+	"sync"
 
 	"github.com/gordonklaus/audio"
 )
 
-var tones Tones
-
-type Tones struct {
-	audio.MultiVoice
-}
-
-func (t *Tones) Sing() float64 { return math.Tanh(t.MultiVoice.Sing() / 4) }
-func (t *Tones) Done() bool    { return false }
-
-var playControl audio.PlayControl
+var (
+	tones       Tones
+	playControl audio.PlayControl
+)
 
 func startAudio() {
+	tones.Reverb = audio.NewReverb()
 	playControl = audio.PlayAsync(&tones)
 }
 
@@ -25,103 +21,88 @@ func stopAudio() {
 	playControl.Stop()
 }
 
-type pressedTone struct {
-	Amp audio.Control
-	Osc audio.FixedFreqSineOsc
+type Tones struct {
+	mu         sync.Mutex
+	MultiVoice audio.MultiVoice
+	Reverb     *audio.Reverb
 }
 
-func newPressedTone(freq float64) *pressedTone {
-	v := &pressedTone{}
-	v.Amp.SetPoints([]*audio.ControlPoint{{0, -12}, {9999, -12}})
-	v.Osc.SetFreq(freq)
-	return v
+func (t *Tones) AddTone(v *Tone) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	t.MultiVoice.Add(v)
 }
 
-func (v *pressedTone) attack(amp float64) {
-	a := v.Amp.Sing()
-	t := .15
-	if amp < a {
-		t = 4
+func (t *Tones) Sing() float64 {
+	x := t.MultiVoice.Sing() / 8
+	return (3*x + t.Reverb.Filter(x)) / 4
+}
+
+func (t *Tones) Done() bool {
+	return false
+}
+
+type Tone struct {
+	mu        sync.Mutex
+	Harmonics []*ToneHarmonic
+	Amp       audio.Control
+}
+
+func NewTone(pitch float64) *Tone {
+	ToneHarmonics := make([]*ToneHarmonic, len(harmonics))
+	for i, h := range harmonics {
+		ToneHarmonics[i] = NewToneHarmonic(h)
 	}
-	v.Amp.SetPoints([]*audio.ControlPoint{{0, a}, {t, amp}, {9999, amp}})
+	t := &Tone{Harmonics: ToneHarmonics}
+	t.SetPitch(pitch)
+	t.Amp.SetPoints([]*audio.ControlPoint{{0, -12}, {.05, 0}, {99999, 0}})
+	return t
 }
 
-func (v *pressedTone) release() {
-	a := v.Amp.Sing()
-	v.Amp.SetPoints([]*audio.ControlPoint{{0, a}, {4, -12}})
+func (t *Tone) Release() {
+	t.mu.Lock()
+	a := t.Amp.Sing()
+	t.Amp.SetPoints([]*audio.ControlPoint{{0, a}, {4, -12}})
+	t.mu.Unlock()
 }
 
-func (v *pressedTone) amp() float64 {
-	return math.Exp2(v.Amp.Sing())
-}
-
-func (v *pressedTone) Sing() float64 {
-	return math.Exp2(v.Amp.Sing()) * math.Tanh(2*v.Osc.Sine())
-}
-
-func (v *pressedTone) Done() bool {
-	return v.Amp.Done()
-}
-
-type pluckedTone struct {
-	Amp *audio.Control
-	Osc audio.FixedFreqSineOsc
-}
-
-func newPluckedTone(amp, freq float64) *pluckedTone {
-	v := &pluckedTone{Amp: audio.NewControl([]*audio.ControlPoint{{0, -12}, {.05, amp}, {4, -12}})}
-	v.Osc.SetFreq(freq)
-	return v
-}
-
-func (v *pluckedTone) amp() float64 {
-	return math.Exp2(v.Amp.Sing())
-}
-
-func (v *pluckedTone) Sing() float64 {
-	return math.Exp2(v.Amp.Sing()) * math.Tanh(2*v.Osc.Sine())
-}
-
-func (v *pluckedTone) Done() bool {
-	return v.Amp.Done()
-}
-
-type bowedTone struct {
-	amp_, targetAmp float64
-	ampChan         chan float64
-	Osc             audio.FixedFreqSineOsc
-}
-
-func newBowedTone(freq float64) *bowedTone {
-	v := &bowedTone{amp_: -8, targetAmp: -8, ampChan: make(chan float64, 100)}
-	v.Osc.SetFreq(freq)
-	return v
-}
-
-func (v *bowedTone) attack(amp float64) {
-	select {
-	case v.ampChan <- amp:
-	default:
+func (t *Tone) SetPitch(p float64) {
+	freq := math.Exp2(p)
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for _, h := range t.Harmonics {
+		h.SetFreq(freq)
 	}
 }
 
-func (v *bowedTone) amp() float64 {
-	return math.Exp2(v.amp_)
-}
-
-func (v *bowedTone) Sing() float64 {
-	select {
-	case targetAmp := <-v.ampChan:
-		v.targetAmp = math.Max(v.targetAmp, targetAmp)
-	default:
+func (t *Tone) Sing() float64 {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	x := 0.0
+	for i := range t.Harmonics {
+		x += t.Harmonics[i].Sing()
 	}
-	decay := 3.0 / 48000
-	v.targetAmp -= decay
-	da := 16.0 / 48000
-	v.amp_ += math.Min(da, math.Max(-da, v.targetAmp-v.amp_))
-	return math.Exp2(v.amp_) * math.Tanh(2*v.Osc.Sine())
+	return math.Exp2(t.Amp.Sing()) * x
 }
 
-func (v *bowedTone) Done() bool {
-	return v.amp_ < -12
+func (t *Tone) Done() bool {
+	return t.Amp.Done()
+}
+
+type ToneHarmonic struct {
+	harmonic harmonic
+	Sine     audio.SineOsc
+}
+
+func NewToneHarmonic(h harmonic) *ToneHarmonic {
+	return &ToneHarmonic{harmonic: h}
+}
+
+func (h *ToneHarmonic) SetFreq(freq float64) {
+	h.Sine.Freq(freq * h.harmonic.ratio)
+}
+
+func (h *ToneHarmonic) Sing() float64 {
+	return h.harmonic.amplitude * h.Sine.Sing()
 }
