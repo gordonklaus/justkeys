@@ -4,11 +4,11 @@ import (
 	"math"
 
 	"github.com/go-gl/mathgl/mgl32"
-	"github.com/pzsz/voronoi"
-	"github.com/pzsz/voronoi/utils"
 	"golang.org/x/mobile/event/touch"
 	"golang.org/x/mobile/gl"
 	"gonum.org/v1/gonum/mathext"
+
+	"github.com/gordonklaus/justkeys/voronoi"
 )
 
 type Keys struct {
@@ -17,7 +17,7 @@ type Keys struct {
 	// buffer  *VertexBuffer
 
 	pressed map[float64]*Key
-	diagram *voronoi.Diagram
+	diagram voronoi.Diagram
 }
 
 func NewKeys(glctx gl.Context, program *Program) *Keys {
@@ -40,17 +40,24 @@ func (k *Keys) buildDiagram() {
 		playingPitches = []float64{tonicPitch}
 	}
 
-	sites := []voronoi.Vertex{}
+	// sites := []voronoi.Point{
+	// 	{8, 0},
+	// 	{9, 0.1},
+	// 	{8.5, 0.5},
+	// 	{8.4, 1},
+	// }
+
+	sites := []voronoi.Point{}
 	for _, r := range rats {
 		pitch := tonicPitch + math.Log2(float64(r.a)/float64(r.b))
 		if pitch < 4 || pitch > 14 {
 			continue
 		}
 		diss := totalDissonance(pitch, playingPitches)
-		sites = append(sites, voronoi.Vertex{pitch, diss})
+		sites = append(sites, voronoi.Point{pitch, diss})
 	}
-	bbox := voronoi.NewBBox(4, 14, -.5, 1.5)
-	k.diagram = voronoi.ComputeDiagram(sites, bbox, true)
+	// bbox := voronoi.NewBBox(4, 14, -.5, 1.5)
+	k.diagram = voronoi.ComputeDiagram(sites)
 }
 
 func (k *Keys) Release() {
@@ -59,31 +66,46 @@ func (k *Keys) Release() {
 
 func (k *Keys) Draw() {
 	vs := []Vertex{}
+	ps := []Vertex{}
 	for _, cell := range k.diagram.Cells {
-		color := mgl32.Vec4{.3, .3, .3, 1}
+		color := mgl32.Vec4{.9, .9, .9, 1}
 		if _, ok := k.pressed[cell.Site.X]; ok {
 			color = mgl32.Vec4{.6, .6, .6, 1}
 		}
 		site := voronoiVertexToVec2(cell.Site)
-		for _, edge := range cell.Halfedges {
-			va := voronoiVertexToVec2(edge.Edge.Va.Vertex)
-			vb := voronoiVertexToVec2(edge.Edge.Vb.Vertex)
+		ps = append(ps,
+			Vertex{Position: mgl32.Vec2{site[0] - .005, site[1]}, Color: color},
+			Vertex{Position: mgl32.Vec2{site[0] + .005, site[1]}, Color: color},
+			Vertex{Position: mgl32.Vec2{site[0], site[1] - .005}, Color: color},
+			Vertex{Position: mgl32.Vec2{site[0], site[1] + .005}, Color: color},
+		)
+		for edge := cell.Edges; ; {
+			// if edge.Type == voronoi.LineSegment {
+			va := voronoiVertexToVec2(edge.P1)
+			vb := voronoiVertexToVec2(edge.P2)
 			vs = append(vs,
-				Vertex{Position: site, Color: color},
-				Vertex{Position: va},
-				Vertex{Position: vb},
+				Vertex{Position: site.Add(va.Sub(site).Mul(.95)), Color: color},
+				Vertex{Position: site.Add(vb.Sub(site).Mul(.95)), Color: color},
 			)
+			// }
+			edge = edge.Next
+			if edge == cell.Edges {
+				break
+			}
 		}
 	}
-	buffer := NewVertexBuffer(k.glctx, gl.TRIANGLES, vs)
+	buffer := NewVertexBuffer(k.glctx, gl.LINES, vs)
+	pbuf := NewVertexBuffer(k.glctx, gl.LINES, ps)
 
 	k.glctx.LineWidth(1)
 	k.program.Draw(buffer, mgl32.Ident4())
+	k.program.Draw(pbuf, mgl32.Ident4())
 
+	pbuf.Release()
 	buffer.Release()
 }
 
-func voronoiVertexToVec2(v voronoi.Vertex) mgl32.Vec2 {
+func voronoiVertexToVec2(v voronoi.Point) mgl32.Vec2 {
 	return mgl32.Vec2{float32(v.X), float32(v.Y)}
 }
 
@@ -114,7 +136,7 @@ type Key struct {
 
 func (k *Keys) pitchForTouch(x, y float64) (float64, bool) {
 	for _, cell := range k.diagram.Cells {
-		if utils.InsideCell(cell, voronoi.Vertex{x, y}) {
+		if cell.Contains(voronoi.Point{x, y}) {
 			return cell.Site.X, true
 		}
 	}
