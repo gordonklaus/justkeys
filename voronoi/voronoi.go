@@ -2,7 +2,6 @@ package voronoi
 
 import (
 	"container/heap"
-	"fmt"
 	"math"
 )
 
@@ -84,8 +83,6 @@ func (e *HalfEdge) setP2(p Point) {
 
 func (e *HalfEdge) setNext(e2 *HalfEdge) {
 	if e.Cell != e2.Cell {
-		fmt.Println(e.Cell, e.Pair.Cell)
-		fmt.Println(e2.Cell, e2.Pair.Cell)
 		panic("mismatch")
 	}
 	e.Next = e2
@@ -115,7 +112,6 @@ func ComputeDiagram(sites []Point) Diagram {
 	for events.Len() > 0 {
 		switch e := heap.Pop(&events).(type) {
 		case *siteEvent:
-			fmt.Println("site:", e.priority())
 			old, new := insertArc(&beach, e.site)
 			if old.vertexEvent != nil {
 				old.vertexEvent.arc = nil
@@ -134,7 +130,6 @@ func ComputeDiagram(sites []Point) Diagram {
 			if e.arc == nil {
 				continue
 			}
-			fmt.Println("vertex:", e.priority())
 			removeArc(e.arc)
 			left := e.arc.pred.pred
 			right := e.arc.succ.succ
@@ -151,24 +146,17 @@ func ComputeDiagram(sites []Point) Diagram {
 				heap.Push(&events, ve)
 			}
 
-			leftEdge := e.arc.pred
-			rightEdge := e.arc.succ
-			fmt.Println(left.site, right.site)
-			fmt.Println(leftEdge.edge.Cell, leftEdge.edge.Pair.Cell)
-			fmt.Println(rightEdge.edge.Cell, rightEdge.edge.Pair.Cell)
+			leftEdge := e.arc.pred.edge
+			rightEdge := e.arc.succ.edge
 			he1, he2 := newEdge(diagram.Cells[left.site], diagram.Cells[right.site])
-			leftEdge.edge.setP2(e.vertex)
-			rightEdge.edge.setP2(e.vertex)
+			leftEdge.setP2(e.vertex)
+			rightEdge.setP2(e.vertex)
 			he2.setP2(e.vertex)
-			rightEdge.edge.setNext(leftEdge.edge.Pair)
-			leftEdge.edge.setNext(he1)
-			he2.setNext(rightEdge.edge.Pair)
+			rightEdge.setNext(leftEdge.Pair)
+			leftEdge.setNext(he1)
+			he2.setNext(rightEdge.Pair)
 
-			if left.succ == leftEdge {
-				leftEdge.edge = he1
-			} else {
-				rightEdge.edge = he1
-			}
+			left.succ.edge = he1
 		}
 	}
 
@@ -181,12 +169,10 @@ func ComputeDiagram(sites []Point) Diagram {
 			b = e
 		}
 
-		// fmt.Println(b.edge.Cell, b.edge.Pair.Cell)
 		start := b.edge
 		prev := start.Pair
 		b = b.succ.succ
 		for ; b != nil; b = b.succ.succ {
-			// fmt.Println(b.edge.Cell, b.edge.Pair.Cell)
 			if b.edge.Type == IncomingRay {
 				panic("INCOMING")
 			}
@@ -354,7 +340,7 @@ func insertArc(beach *beachTreeNode, site Point) (*beachTreeArc, *beachTreeArc) 
 		right.pred = rightEdge
 		left.parent = leftEdge
 		left.succ = leftEdge
-		a.parent = leftEdge
+		a.parent = rightEdge
 		a.pred = leftEdge
 		a.succ = rightEdge
 		if left.pred != nil {

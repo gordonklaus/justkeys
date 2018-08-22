@@ -80,14 +80,14 @@ func (k *Keys) Draw() {
 			Vertex{Position: mgl32.Vec2{site[0], site[1] + .005}, Color: color},
 		)
 		for edge := cell.Edges; ; {
-			// if edge.Type == voronoi.LineSegment {
-			va := voronoiVertexToVec2(edge.P1)
-			vb := voronoiVertexToVec2(edge.P2)
-			vs = append(vs,
-				Vertex{Position: site.Add(va.Sub(site).Mul(.95)), Color: color},
-				Vertex{Position: site.Add(vb.Sub(site).Mul(.95)), Color: color},
-			)
-			// }
+			if edge.Type == voronoi.LineSegment {
+				va := voronoiVertexToVec2(edge.P1)
+				vb := voronoiVertexToVec2(edge.P2)
+				vs = append(vs,
+					Vertex{Position: site.Add(va.Sub(site).Mul(.95)), Color: color},
+					Vertex{Position: site.Add(vb.Sub(site).Mul(.95)), Color: color},
+				)
+			}
 			edge = edge.Next
 			if edge == cell.Edges {
 				break
