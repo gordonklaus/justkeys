@@ -9,6 +9,20 @@ type Diagram struct {
 	Cells map[Point]*Cell
 }
 
+func (d *Diagram) Find(p Point) *Cell {
+	var c *Cell
+	for _, c = range d.Cells {
+		break
+	}
+	for {
+		c2 := c.Find(p)
+		if c2 == c || c2 == nil {
+			return c2
+		}
+		c = c2
+	}
+}
+
 type Point struct {
 	X, Y float64
 }
@@ -30,7 +44,20 @@ type Cell struct {
 }
 
 func (c *Cell) Contains(p Point) bool {
-	return true
+	return c.Find(p) == c
+}
+
+func (c *Cell) Find(p Point) *Cell {
+	for edge := c.Edges; ; {
+		if (p.Y-edge.P2.Y)*(edge.P2.X-edge.P1.X) < (edge.P2.Y-edge.P1.Y)*(p.X-edge.P2.X) {
+			return edge.Pair.Cell
+		}
+
+		edge = edge.Next
+		if edge == c.Edges {
+			return c
+		}
+	}
 }
 
 type HalfEdge struct {
@@ -75,8 +102,15 @@ func newEdge(c1, c2 *Cell) (*HalfEdge, *HalfEdge) {
 }
 
 func (e *HalfEdge) setP2(p Point) {
+	if e.Type&OutgoingRay == 0 {
+		e.P1 = p.Add(e.P1.Sub(e.P2))
+	}
 	e.P2 = p
 	e.Type |= IncomingRay
+
+	if e := e.Pair; e.Type&IncomingRay == 0 {
+		e.P2 = p.Add(e.P2.Sub(e.P1))
+	}
 	e.Pair.P1 = p
 	e.Pair.Type |= OutgoingRay
 }
