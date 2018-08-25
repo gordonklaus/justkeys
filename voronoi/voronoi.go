@@ -130,6 +130,7 @@ func ComputeDiagram(sites []Point) Diagram {
 			if e.arc == nil {
 				continue
 			}
+
 			removeArc(e.arc)
 			left := e.arc.pred.pred
 			right := e.arc.succ.succ
@@ -189,7 +190,7 @@ func ComputeDiagram(sites []Point) Diagram {
 type eventQueue []event
 
 func (q eventQueue) Len() int            { return len(q) }
-func (q eventQueue) Less(i, j int) bool  { return q[i].priority() < q[j].priority() }
+func (q eventQueue) Less(i, j int) bool  { return q[i].priority().LessThan(q[j].priority()) }
 func (q eventQueue) Swap(i, j int)       { q[i], q[j] = q[j], q[i] }
 func (q *eventQueue) Push(x interface{}) { *q = append(*q, x.(event)) }
 func (q *eventQueue) Pop() interface{} {
@@ -199,14 +200,14 @@ func (q *eventQueue) Pop() interface{} {
 }
 
 type event interface {
-	priority() float64
+	priority() Point
 }
 
 type siteEvent struct {
 	site Point
 }
 
-func (e *siteEvent) priority() float64 { return e.site.Y }
+func (e *siteEvent) priority() Point { return e.site }
 
 type vertexEvent struct {
 	arc    *beachTreeArc
@@ -226,6 +227,10 @@ func newVertexEvent(a *beachTreeArc) (*vertexEvent, bool) {
 		return nil, false
 	}
 
+	// if !onEdge(v.X, left.site, a.site) || !onEdge(v.X, a.site, right.site) {
+	// 	return nil, false
+	// }
+
 	r := math.Hypot(a.site.X-v.X, a.site.Y-v.Y)
 	e := &vertexEvent{
 		arc:    a,
@@ -235,6 +240,19 @@ func newVertexEvent(a *beachTreeArc) (*vertexEvent, bool) {
 	a.vertexEvent = e
 
 	return e, true
+}
+
+func onEdge(x float64, left, right Point) bool {
+	if left.Y > right.Y {
+		if x >= left.X {
+			return true
+		}
+	} else {
+		if x < right.X {
+			return true
+		}
+	}
+	return false
 }
 
 func sort3(a, b, c Point) [3]Point {
@@ -250,7 +268,7 @@ func sort3(a, b, c Point) [3]Point {
 	return [3]Point{a, b, c}
 }
 
-func (e *vertexEvent) priority() float64 { return e.y }
+func (e *vertexEvent) priority() Point { return Point{e.vertex.X, e.y} }
 
 func circumcenter(a, b, c Point) (Point, bool) {
 	d := (c.Y-b.Y)*(b.X-a.X) - (b.Y-a.Y)*(c.X-b.X)
@@ -369,10 +387,6 @@ func leftOfEdge(site Point, e *beachTreeEdge) bool {
 	}
 
 	// TODO?: dx == 0
-
-	if dx < 0 {
-		p1, p2 = p2, p1
-	}
 
 	if dy > 0 && site.X > p2.X {
 		return false
