@@ -67,8 +67,8 @@ func (p *Program) Release() {
 }
 
 func (p *Program) Size(sz image.Point) {
-	width := float32(2.4)
-	height := float32(2)
+	width := float32(1.2)
+	height := float32(1)
 	p.proj = mgl32.Ortho2D(-width/2, width/2, -height/2, height/2)
 }
 

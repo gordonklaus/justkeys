@@ -40,14 +40,6 @@ func (k *Keys) buildDiagram() {
 		playingPitches = []float64{tonicPitch}
 	}
 
-	// sites := []voronoi.Point{
-	// 	{8, 0},
-	// 	{8.5, 0.05},
-	// 	{8.25, 0.25},
-	// 	{8.2, .5},
-	// 	{8.45, .4},
-	// }
-
 	sites := []voronoi.Point{}
 	for _, r := range rats {
 		pitch := tonicPitch + math.Log2(float64(r.a)/float64(r.b))
@@ -57,8 +49,39 @@ func (k *Keys) buildDiagram() {
 		diss := totalDissonance(pitch, playingPitches)
 		sites = append(sites, voronoi.Point{pitch, diss})
 	}
-	// bbox := voronoi.NewBBox(4, 14, -.5, 1.5)
 	k.diagram = voronoi.ComputeDiagram(sites)
+	closeCells(k.diagram)
+}
+
+func closeCells(diagram voronoi.Diagram) {
+	for _, cell := range diagram.Cells {
+		var out *voronoi.HalfEdge
+		for edge := cell.Edges; ; {
+			if edge.Type == voronoi.OutgoingRay {
+				out = edge
+				break
+			}
+			edge = edge.Next
+			if edge == cell.Edges {
+				break
+			}
+		}
+
+		if out != nil {
+			e := &voronoi.HalfEdge{
+				Cell: cell,
+				Type: voronoi.LineSegment,
+				P1:   out.P2,
+				P2:   out.Next.P1,
+				Prev: out,
+				Next: out.Next,
+			}
+			out.Pair.Type = voronoi.LineSegment
+			out.Pair.Prev = e
+			out.Type = voronoi.LineSegment
+			out.Next = e
+		}
+	}
 }
 
 func (k *Keys) Release() {
@@ -67,26 +90,20 @@ func (k *Keys) Release() {
 
 func (k *Keys) Draw() {
 	vs := []Vertex{}
-	ps := []Vertex{}
 	for _, cell := range k.diagram.Cells {
-		color := mgl32.Vec4{.9, .9, .9, 1}
+		color := mgl32.Vec4{.3, .3, .3, 1}
 		if _, ok := k.pressed[cell.Site.X]; ok {
 			color = mgl32.Vec4{.6, .6, .6, 1}
 		}
 		site := voronoiVertexToVec2(cell.Site)
-		ps = append(ps,
-			Vertex{Position: mgl32.Vec2{site[0] - .005, site[1]}, Color: color},
-			Vertex{Position: mgl32.Vec2{site[0] + .005, site[1]}, Color: color},
-			Vertex{Position: mgl32.Vec2{site[0], site[1] - .005}, Color: color},
-			Vertex{Position: mgl32.Vec2{site[0], site[1] + .005}, Color: color},
-		)
 		for edge := cell.Edges; ; {
 			if edge.Type == voronoi.LineSegment {
 				va := voronoiVertexToVec2(edge.P1)
 				vb := voronoiVertexToVec2(edge.P2)
 				vs = append(vs,
-					Vertex{Position: site.Add(va.Sub(site).Mul(.95)), Color: color},
-					Vertex{Position: site.Add(vb.Sub(site).Mul(.95)), Color: color},
+					Vertex{Position: site, Color: color},
+					Vertex{Position: va},
+					Vertex{Position: vb},
 				)
 			}
 			edge = edge.Next
@@ -95,14 +112,11 @@ func (k *Keys) Draw() {
 			}
 		}
 	}
-	buffer := NewVertexBuffer(k.glctx, gl.LINES, vs)
-	pbuf := NewVertexBuffer(k.glctx, gl.LINES, ps)
+	buffer := NewVertexBuffer(k.glctx, gl.TRIANGLES, vs)
 
 	k.glctx.LineWidth(1)
 	k.program.Draw(buffer, mgl32.Ident4())
-	k.program.Draw(pbuf, mgl32.Ident4())
 
-	pbuf.Release()
 	buffer.Release()
 }
 
@@ -136,10 +150,8 @@ type Key struct {
 }
 
 func (k *Keys) pitchForTouch(x, y float64) (float64, bool) {
-	for _, cell := range k.diagram.Cells {
-		if cell.Contains(voronoi.Point{x, y}) {
-			return cell.Site.X, true
-		}
+	if cell := k.diagram.Find(voronoi.Point{x, y}); cell != nil {
+		return cell.Site.X, true
 	}
 	return 0, false
 }
