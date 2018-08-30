@@ -35,12 +35,12 @@ func init() {
 	}
 }
 
-func totalDissonance(pitch float64, playingPitches []float64) float64 {
+func totalDissonance(pitch float64, playing []ratio) float64 {
 	d := 0.0
-	for _, playing := range playingPitches {
+	for _, playing := range playing {
 		for _, h1 := range harmonics {
 			for _, h2 := range harmonics {
-				d += beatAmplitude(h1.amplitude, h2.amplitude) * dissonance(h1.amplitude, h2.amplitude, playing+h1.pitch, pitch+h2.pitch)
+				d += beatAmplitude(h1.amplitude, h2.amplitude) * dissonance(h1.amplitude, h2.amplitude, math.Log2(playing.float())+h1.pitch, pitch+h2.pitch)
 			}
 		}
 	}

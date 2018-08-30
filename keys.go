@@ -16,8 +16,9 @@ type Keys struct {
 	program *Program
 	// buffer  *VertexBuffer
 
-	pressed map[float64]*Key
-	diagram voronoi.Diagram
+	pressed      map[ratio]*Key
+	pitchToRatio map[float64]ratio
+	diagram      voronoi.Diagram
 }
 
 func NewKeys(glctx gl.Context, program *Program) *Keys {
@@ -25,29 +26,42 @@ func NewKeys(glctx gl.Context, program *Program) *Keys {
 		glctx:   glctx,
 		program: program,
 		// buffer,
-		pressed: map[float64]*Key{},
+		pressed: map[ratio]*Key{},
 	}
 	k.buildDiagram()
 	return k
 }
 
 func (k *Keys) buildDiagram() {
-	playingPitches := []float64{}
+	playing := []ratio{}
 	for p := range k.pressed {
-		playingPitches = append(playingPitches, p)
+		playing = append(playing, p)
 	}
-	if len(playingPitches) == 0 {
-		playingPitches = []float64{tonicPitch}
+	if len(playing) == 0 {
+		playing = []ratio{{1 << tonicPitch, 1}}
+	}
+
+	ratios := map[ratio]int{}
+	for _, p := range playing {
+		for _, r := range rats {
+			ratios[p.mul(r)]++
+		}
 	}
 
 	sites := []voronoi.Point{}
-	for _, r := range rats {
-		pitch := tonicPitch + math.Log2(float64(r.a)/float64(r.b))
+	k.pitchToRatio = map[float64]ratio{}
+	for r, count := range ratios {
+		if count < len(playing) {
+			continue
+		}
+
+		pitch := math.Log2(r.float())
 		if pitch < 4 || pitch > 14 {
 			continue
 		}
-		diss := totalDissonance(pitch, playingPitches)
+		diss := totalDissonance(pitch, playing)
 		sites = append(sites, voronoi.Point{pitch, diss})
+		k.pitchToRatio[pitch] = r
 	}
 	k.diagram = voronoi.ComputeDiagram(sites)
 	closeCells(k.diagram)
@@ -92,7 +106,7 @@ func (k *Keys) Draw() {
 	vs := []Vertex{}
 	for _, cell := range k.diagram.Cells {
 		color := mgl32.Vec4{.3, .3, .3, 1}
-		if _, ok := k.pressed[cell.Site.X]; ok {
+		if _, ok := k.pressed[k.pitchToRatio[cell.Site.X]]; ok {
 			color = mgl32.Vec4{.6, .6, .6, 1}
 		}
 		site := voronoiVertexToVec2(cell.Site)
@@ -127,10 +141,10 @@ func voronoiVertexToVec2(v voronoi.Point) mgl32.Vec2 {
 func (k *Keys) Touch(e touch.Event) {
 	switch e.Type {
 	case touch.TypeBegin:
-		if pitch, ok := k.pitchForTouch(float64(e.X), float64(e.Y)); ok && k.pressed[pitch] == nil {
+		if pitch, ok := k.pitchForTouch(float64(e.X), float64(e.Y)); ok && k.pressed[k.pitchToRatio[pitch]] == nil {
 			tone := NewTone(pitch)
 			tones.AddTone(tone)
-			k.pressed[pitch] = &Key{e.Sequence, tone}
+			k.pressed[k.pitchToRatio[pitch]] = &Key{e.Sequence, tone}
 			k.buildDiagram()
 		}
 	case touch.TypeEnd:
