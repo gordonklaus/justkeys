@@ -27,9 +27,12 @@ type Point struct {
 	X, Y float64
 }
 
-func (p Point) Add(q Point) Point   { return Point{p.X + q.X, p.Y + q.Y} }
-func (p Point) Sub(q Point) Point   { return Point{p.X - q.X, p.Y - q.Y} }
-func (p Point) Mul(a float64) Point { return Point{p.X * a, p.Y * a} }
+func (p Point) Add(q Point) Point     { return Point{p.X + q.X, p.Y + q.Y} }
+func (p Point) Sub(q Point) Point     { return Point{p.X - q.X, p.Y - q.Y} }
+func (p Point) Mul(a float64) Point   { return Point{p.X * a, p.Y * a} }
+func (p Point) Len() float64          { return math.Hypot(p.X, p.Y) }
+func (p Point) Dot(q Point) float64   { return p.X*q.X + p.Y*q.Y }
+func (p Point) Cross(q Point) float64 { return p.X*q.Y - p.Y*q.X }
 
 func (p Point) LessThan(q Point) bool {
 	if p.Y == q.Y {
@@ -49,8 +52,10 @@ func (c *Cell) Contains(p Point) bool {
 
 func (c *Cell) Find(p Point) *Cell {
 	for edge := c.Edges; ; {
-		if (p.Y-edge.P2.Y)*(edge.P2.X-edge.P1.X) < (edge.P2.Y-edge.P1.Y)*(p.X-edge.P2.X) {
-			return edge.Pair.Cell
+		if v1, v2 := edge.P2.Sub(edge.P1), p.Sub(edge.P2); v1.Cross(v2) < 0 {
+			if edge.Pair != nil {
+				return edge.Pair.Cell
+			}
 		}
 
 		edge = edge.Next
@@ -218,6 +223,24 @@ func ComputeDiagram(sites []Point) Diagram {
 		start.setNext(prev)
 	}
 
+	for _, cell := range diagram.Cells {
+		for edge := cell.Edges; ; {
+			if edge.P2.Sub(edge.P1).Len() < 1e-9 {
+				edge.Prev.setNext(edge.Next)
+				edge.Pair.Prev.setNext(edge.Pair.Next)
+				p := edge.P1.Add(edge.P2).Mul(.5)
+				edge.Prev.setP2(p)
+				edge.Pair.Prev.setP2(p)
+				edge.Cell.Edges = edge.Prev
+				edge.Pair.Cell.Edges = edge.Pair.Prev
+			}
+			edge = edge.Next
+			if edge == cell.Edges {
+				break
+			}
+		}
+	}
+
 	return diagram
 }
 
@@ -265,7 +288,7 @@ func newVertexEvent(a *beachTreeArc) (*vertexEvent, bool) {
 	// 	return nil, false
 	// }
 
-	r := math.Hypot(a.site.X-v.X, a.site.Y-v.Y)
+	r := a.site.Sub(v).Len()
 	e := &vertexEvent{
 		arc:    a,
 		vertex: v,
@@ -305,15 +328,16 @@ func sort3(a, b, c Point) [3]Point {
 func (e *vertexEvent) priority() Point { return Point{e.vertex.X, e.y} }
 
 func circumcenter(a, b, c Point) (Point, bool) {
-	d := (c.Y-b.Y)*(b.X-a.X) - (b.Y-a.Y)*(c.X-b.X)
+	ab := b.Sub(a)
+	bc := c.Sub(b)
+	ca := a.Sub(c)
+	d := ab.Cross(bc)
 	if d <= 0 {
 		return Point{}, false
 	}
-	t := ((c.X-a.X)*(b.X-c.X) + (c.Y-a.Y)*(b.Y-c.Y)) / d / 2
-	return Point{
-		X: (a.X+b.X)/2 + (b.Y-a.Y)*t,
-		Y: (a.Y+b.Y)/2 + (a.X-b.X)*t,
-	}, true
+	t := ab.Dot(bc) / d / 2
+	ca_ := Point{-ca.Y, ca.X}
+	return a.Add(c).Mul(.5).Add(ca_.Mul(-t)), true
 }
 
 type beachTreeNode interface{}
