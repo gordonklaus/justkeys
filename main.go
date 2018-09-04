@@ -35,12 +35,18 @@ func init() {
 	}
 }
 
-func totalDissonance(pitch float64, playing []ratio) float64 {
+type pitchAmplitude struct {
+	pitch     ratio
+	amplitude float64
+}
+
+func totalDissonance(pitch float64, playing []pitchAmplitude) float64 {
 	d := 0.0
 	for _, playing := range playing {
 		for _, h1 := range harmonics {
+			a1 := h1.amplitude * playing.amplitude
 			for _, h2 := range harmonics {
-				d += beatAmplitude(h1.amplitude, h2.amplitude) * dissonance(h1.amplitude, h2.amplitude, math.Log2(playing.float())+h1.pitch, pitch+h2.pitch)
+				d += beatAmplitude(a1, h2.amplitude) * dissonance(a1, h2.amplitude, math.Log2(playing.pitch.float())+h1.pitch, pitch+h2.pitch)
 			}
 		}
 	}
@@ -54,11 +60,10 @@ func main() {
 			sz    size.Event
 		)
 
-		repaint := make(chan struct{}, 1)
 		go func() {
-			for range repaint {
+			for {
 				a.Send(paint.Event{})
-				time.Sleep(time.Second / 60)
+				time.Sleep(time.Second / 30)
 			}
 		}()
 
@@ -92,11 +97,6 @@ func main() {
 				e.X, e.Y = program.Clip2World(clipX, clipY)
 
 				keys.Touch(e)
-
-				select {
-				case repaint <- struct{}{}:
-				default:
-				}
 			}
 		}
 	})
@@ -131,5 +131,6 @@ func onPaint(glctx gl.Context, sz size.Event) {
 	glctx.ClearColor(0, 0, 0, 1)
 	glctx.Clear(gl.COLOR_BUFFER_BIT)
 
+	keys.Update()
 	keys.Draw()
 }

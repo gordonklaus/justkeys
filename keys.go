@@ -2,6 +2,7 @@ package main
 
 import (
 	"math"
+	"time"
 
 	"github.com/go-gl/mathgl/mgl32"
 	"golang.org/x/mobile/event/touch"
@@ -17,6 +18,8 @@ type Keys struct {
 	// buffer  *VertexBuffer
 
 	pressed      map[ratio]*Key
+	recent       map[ratio]float64
+	lastTime     time.Time
 	pitchToRatio map[float64]ratio
 	diagram      voronoi.Diagram
 }
@@ -26,25 +29,27 @@ func NewKeys(glctx gl.Context, program *Program) *Keys {
 		glctx:   glctx,
 		program: program,
 		// buffer,
-		pressed: map[ratio]*Key{},
+		pressed:  map[ratio]*Key{},
+		recent:   map[ratio]float64{},
+		lastTime: time.Now(),
 	}
 	k.buildDiagram()
 	return k
 }
 
 func (k *Keys) buildDiagram() {
-	playing := []ratio{}
-	for p := range k.pressed {
-		playing = append(playing, p)
+	playing := []pitchAmplitude{}
+	for p, a := range k.recent {
+		playing = append(playing, pitchAmplitude{p, a})
 	}
 	if len(playing) == 0 {
-		playing = []ratio{{1 << tonicPitch, 1}}
+		playing = []pitchAmplitude{{ratio{1 << tonicPitch, 1}, 1}}
 	}
 
 	ratios := map[ratio]int{}
 	for _, p := range playing {
 		for _, r := range rats {
-			ratios[p.mul(r)]++
+			ratios[p.pitch.mul(r)]++
 		}
 	}
 
@@ -138,21 +143,37 @@ func voronoiVertexToVec2(v voronoi.Point) mgl32.Vec2 {
 	return mgl32.Vec2{float32(v.X), float32(v.Y)}
 }
 
+func (k *Keys) Update() {
+	const attack, release = 1, 4
+	dt := time.Now().Sub(k.lastTime).Seconds()
+	k.lastTime = time.Now()
+	for p := range k.recent {
+		d := dt / attack
+		if k.pressed[p] == nil {
+			d = -dt / release
+		}
+		k.recent[p] = math.Min(k.recent[p]+d, 1)
+		if k.recent[p] < 0 {
+			delete(k.recent, p)
+		}
+	}
+	k.buildDiagram()
+}
+
 func (k *Keys) Touch(e touch.Event) {
 	switch e.Type {
 	case touch.TypeBegin:
-		if pitch, ok := k.pitchForTouch(float64(e.X), float64(e.Y)); ok && k.pressed[k.pitchToRatio[pitch]] == nil {
-			tone := NewTone(pitch)
+		if pitch, ok := k.pitchForTouch(float64(e.X), float64(e.Y)); ok && k.pressed[pitch] == nil {
+			tone := NewTone(math.Log2(pitch.float()))
 			tones.AddTone(tone)
-			k.pressed[k.pitchToRatio[pitch]] = &Key{e.Sequence, tone}
-			k.buildDiagram()
+			k.pressed[pitch] = &Key{e.Sequence, tone}
+			k.recent[pitch] = 0
 		}
 	case touch.TypeEnd:
 		for pitch, key := range k.pressed {
 			if key.seq == e.Sequence {
 				key.tone.Release()
 				delete(k.pressed, pitch)
-				k.buildDiagram()
 			}
 		}
 	}
@@ -163,11 +184,11 @@ type Key struct {
 	tone *Tone
 }
 
-func (k *Keys) pitchForTouch(x, y float64) (float64, bool) {
+func (k *Keys) pitchForTouch(x, y float64) (ratio, bool) {
 	if cell := k.diagram.Find(voronoi.Point{x, y}); cell != nil {
-		return cell.Site.X, true
+		return k.pitchToRatio[cell.Site.X], true
 	}
-	return 0, false
+	return ratio{}, false
 }
 
 func dissonance(a1, a2, p1, p2 float64) float64 {
