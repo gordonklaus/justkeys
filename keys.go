@@ -30,7 +30,7 @@ func NewKeys(glctx gl.Context, program *Program) *Keys {
 		program: program,
 		// buffer,
 		pressed:  map[ratio]*Key{},
-		recent:   map[ratio]float64{},
+		recent:   map[ratio]float64{{1 << tonicPitch, 1}: 1},
 		lastTime: time.Now(),
 	}
 	k.buildDiagram()
@@ -40,10 +40,7 @@ func NewKeys(glctx gl.Context, program *Program) *Keys {
 func (k *Keys) buildDiagram() {
 	playing := []pitchAmplitude{}
 	for p, a := range k.recent {
-		playing = append(playing, pitchAmplitude{p, a})
-	}
-	if len(playing) == 0 {
-		playing = []pitchAmplitude{{ratio{1 << tonicPitch, 1}, 1}}
+		playing = append(playing, pitchAmplitude{p, (1 - math.Cos(a*math.Pi)) / 2})
 	}
 
 	ratios := map[ratio]int{}
@@ -144,12 +141,22 @@ func voronoiVertexToVec2(v voronoi.Point) mgl32.Vec2 {
 }
 
 func (k *Keys) Update() {
-	const attack, release = 1, 4
+	const attack, release = 4.0, 8.0
 	dt := time.Now().Sub(k.lastTime).Seconds()
 	k.lastTime = time.Now()
+
+	pMax := ratio{}
+	aMax := 0.0
+	for p, a := range k.recent {
+		if a > aMax {
+			aMax = a
+			pMax = p
+		}
+	}
+
 	for p := range k.recent {
 		d := dt / attack
-		if k.pressed[p] == nil {
+		if k.pressed[p] == nil && !(len(k.pressed) == 0 && p == pMax) {
 			d = -dt / release
 		}
 		k.recent[p] = math.Min(k.recent[p]+d, 1)
@@ -167,7 +174,9 @@ func (k *Keys) Touch(e touch.Event) {
 			tone := NewTone(math.Log2(pitch.float()))
 			tones.AddTone(tone)
 			k.pressed[pitch] = &Key{e.Sequence, tone}
-			k.recent[pitch] = 0
+			if _, ok := k.recent[pitch]; !ok {
+				k.recent[pitch] = 0
+			}
 		}
 	case touch.TypeEnd:
 		for pitch, key := range k.pressed {
@@ -217,11 +226,11 @@ func beatAmplitude(a1, a2 float64) float64 {
 
 	meanSquare := a1*a1 + a2*a2
 
-	m := 4 * a1 * a2 / ((a1 + a2) * (a1 + a2))
+	m := math.Max(0, math.Min(1, 4*a1*a2/((a1+a2)*(a1+a2)))) // TODO: better math, not max/min
 	squareMean := (a1 + a2) * mathext.CompleteE(m) / (math.Pi / 2)
 	squareMean *= squareMean
 
-	stddev := math.Sqrt(meanSquare - squareMean)
+	stddev := math.Sqrt(math.Max(0, meanSquare-squareMean))
 	return stddev
 }
 
