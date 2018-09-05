@@ -170,17 +170,21 @@ func (k *Keys) Update() {
 func (k *Keys) Touch(e touch.Event) {
 	switch e.Type {
 	case touch.TypeBegin:
-		if pitch, ok := k.pitchForTouch(float64(e.X), float64(e.Y)); ok && k.pressed[pitch] == nil {
-			tone := NewTone(math.Log2(pitch.float()))
-			tones.AddTone(tone)
-			k.pressed[pitch] = &Key{e.Sequence, tone}
-			if _, ok := k.recent[pitch]; !ok {
-				k.recent[pitch] = 0
+		if pitch, ok := k.pitchForTouch(float64(e.X), float64(e.Y)); ok {
+			if k.pressed[pitch] == nil {
+				tone := NewTone(math.Log2(pitch.float()))
+				tones.AddTone(tone)
+				k.pressed[pitch] = &Key{map[touch.Sequence]struct{}{}, tone}
+				if _, ok := k.recent[pitch]; !ok {
+					k.recent[pitch] = 0
+				}
 			}
+			k.pressed[pitch].seqs[e.Sequence] = struct{}{}
 		}
 	case touch.TypeEnd:
 		for pitch, key := range k.pressed {
-			if key.seq == e.Sequence {
+			delete(key.seqs, e.Sequence)
+			if len(key.seqs) == 0 {
 				key.tone.Release()
 				delete(k.pressed, pitch)
 			}
@@ -189,7 +193,7 @@ func (k *Keys) Touch(e touch.Event) {
 }
 
 type Key struct {
-	seq  touch.Sequence
+	seqs map[touch.Sequence]struct{}
 	tone *Tone
 }
 
