@@ -40,13 +40,13 @@ func NewKeys(glctx gl.Context, program *Program) *Keys {
 func (k *Keys) buildDiagram() {
 	playing := []pitchAmplitude{}
 	for p, a := range k.recent {
-		playing = append(playing, pitchAmplitude{p, (1 - math.Cos(a*math.Pi)) / 2})
+		playing = append(playing, pitchAmplitude{p, math.Log2(p.float()), (1 - math.Cos(a*math.Pi)) / 2})
 	}
 
 	ratios := map[ratio]int{}
 	for _, p := range playing {
 		for _, r := range rats {
-			ratios[p.pitch.mul(r)]++
+			ratios[p.freq.mul(r)]++
 		}
 	}
 
@@ -54,7 +54,7 @@ func (k *Keys) buildDiagram() {
 	k.pitchToRatio = map[float64]ratio{}
 	for r, count := range ratios {
 		if count < len(playing) {
-			continue
+			// continue
 		}
 
 		pitch := math.Log2(r.float())
@@ -231,11 +231,33 @@ func beatAmplitude(a1, a2 float64) float64 {
 	meanSquare := a1*a1 + a2*a2
 
 	m := math.Max(0, math.Min(1, 4*a1*a2/((a1+a2)*(a1+a2)))) // TODO: better math, not max/min
-	squareMean := (a1 + a2) * mathext.CompleteE(m) / (math.Pi / 2)
+	squareMean := (a1 + a2) * completeE(m) / (math.Pi / 2)
 	squareMean *= squareMean
 
 	stddev := math.Sqrt(math.Max(0, meanSquare-squareMean))
 	return stddev
+}
+
+func completeE(m float64) float64 {
+	if m == 1 {
+		return 1
+	}
+	i, f := math.Modf(m * float64(len(completeE_)))
+	i0 := int(i)
+	e0 := completeE_[i0]
+	e1 := 1.0
+	if i1 := i0 + 1; i1 < len(completeE_) {
+		e1 = completeE_[i1]
+	}
+	return e0*(1-f) + e1*f
+}
+
+var completeE_ [1024]float64
+
+func init() {
+	for i := range completeE_ {
+		completeE_[i] = mathext.CompleteE(float64(i) / float64(len(completeE_)))
+	}
 }
 
 func gcd(a, b int) int {

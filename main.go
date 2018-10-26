@@ -35,7 +35,8 @@ func init() {
 }
 
 type pitchAmplitude struct {
-	pitch     ratio
+	freq      ratio
+	pitch     float64
 	amplitude float64
 }
 
@@ -45,7 +46,7 @@ func totalDissonance(pitch float64, playing []pitchAmplitude) float64 {
 		for _, h1 := range harmonics {
 			a1 := h1.amplitude * playing.amplitude
 			for _, h2 := range harmonics {
-				d += beatAmplitude(a1, h2.amplitude) * dissonance(a1, h2.amplitude, math.Log2(playing.pitch.float())+h1.pitch, pitch+h2.pitch)
+				d += beatAmplitude(a1, h2.amplitude) * dissonance(a1, h2.amplitude, playing.pitch+h1.pitch, pitch+h2.pitch)
 			}
 		}
 	}
