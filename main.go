@@ -3,7 +3,6 @@ package main
 import (
 	"log"
 	"math"
-	"time"
 
 	"golang.org/x/mobile/app"
 	"golang.org/x/mobile/event/lifecycle"
@@ -60,13 +59,6 @@ func main() {
 			sz    size.Event
 		)
 
-		go func() {
-			for {
-				a.Send(paint.Event{})
-				time.Sleep(time.Second / 30)
-			}
-		}()
-
 		for e := range a.Events() {
 			switch e := a.Filter(e).(type) {
 			case lifecycle.Event:
@@ -91,6 +83,7 @@ func main() {
 
 				onPaint(glctx, sz)
 				a.Publish()
+				a.Send(paint.Event{})
 			case touch.Event:
 				clipX := 2*e.X/float32(sz.WidthPx) - 1
 				clipY := 1 - 2*e.Y/float32(sz.HeightPx)
