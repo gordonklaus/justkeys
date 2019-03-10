@@ -2,102 +2,32 @@ package main
 
 import (
 	"math"
-	"time"
+	"sort"
 
 	"github.com/go-gl/mathgl/mgl32"
 	"golang.org/x/mobile/event/touch"
 	"golang.org/x/mobile/gl"
-	"gonum.org/v1/gonum/mathext"
-
-	"github.com/gordonklaus/justkeys/voronoi"
 )
 
 type Keys struct {
 	glctx   gl.Context
 	program *Program
-	// buffer  *VertexBuffer
 
-	pressed      map[ratio]*Key
-	recent       map[ratio]float64
-	lastTime     time.Time
-	pitchToRatio map[float64]ratio
-	diagram      voronoi.Diagram
+	keys    []*Key
+	pressed map[ratio]*Key
 }
 
 func NewKeys(glctx gl.Context, program *Program) *Keys {
 	k := &Keys{
 		glctx:   glctx,
 		program: program,
-		// buffer,
-		pressed:  map[ratio]*Key{},
-		recent:   map[ratio]float64{{1 << tonicPitch, 1}: 1},
-		lastTime: time.Now(),
+		pressed: map[ratio]*Key{},
+		keys: []*Key{{
+			pitch: ratio{256, 1},
+			seqs:  map[touch.Sequence]struct{}{},
+		}},
 	}
-	k.buildDiagram()
 	return k
-}
-
-func (k *Keys) buildDiagram() {
-	playing := []pitchAmplitude{}
-	for p, a := range k.recent {
-		playing = append(playing, pitchAmplitude{p, math.Log2(p.float()), (1 - math.Cos(a*math.Pi)) / 2})
-	}
-
-	ratios := map[ratio]int{}
-	for _, p := range playing {
-		for _, r := range rats {
-			ratios[p.freq.mul(r)]++
-		}
-	}
-
-	sites := []voronoi.Point{}
-	k.pitchToRatio = map[float64]ratio{}
-	for r, count := range ratios {
-		if count < len(playing) {
-			// continue
-		}
-
-		pitch := math.Log2(r.float())
-		if pitch < 4 || pitch > 14 {
-			continue
-		}
-		diss := totalDissonance(pitch, playing)
-		sites = append(sites, voronoi.Point{pitch, diss})
-		k.pitchToRatio[pitch] = r
-	}
-	k.diagram = voronoi.ComputeDiagram(sites)
-	closeCells(k.diagram)
-}
-
-func closeCells(diagram voronoi.Diagram) {
-	for _, cell := range diagram.Cells {
-		var out *voronoi.HalfEdge
-		for edge := cell.Edges; ; {
-			if edge.Type == voronoi.OutgoingRay {
-				out = edge
-				break
-			}
-			edge = edge.Next
-			if edge == cell.Edges {
-				break
-			}
-		}
-
-		if out != nil {
-			e := &voronoi.HalfEdge{
-				Cell: cell,
-				Type: voronoi.LineSegment,
-				P1:   out.P2,
-				P2:   out.Next.P1,
-				Prev: out,
-				Next: out.Next,
-			}
-			out.Pair.Type = voronoi.LineSegment
-			out.Pair.Prev = e
-			out.Type = voronoi.LineSegment
-			out.Next = e
-		}
-	}
 }
 
 func (k *Keys) Release() {
@@ -106,27 +36,29 @@ func (k *Keys) Release() {
 
 func (k *Keys) Draw() {
 	vs := []Vertex{}
-	for _, cell := range k.diagram.Cells {
+	for _, key := range k.keys {
+		p := float32(math.Log2(key.pitch.float()))
 		color := mgl32.Vec4{.3, .3, .3, 1}
-		if _, ok := k.pressed[k.pitchToRatio[cell.Site.X]]; ok {
+		if key.tone != nil {
 			color = mgl32.Vec4{.6, .6, .6, 1}
 		}
-		site := voronoiVertexToVec2(cell.Site)
-		for edge := cell.Edges; ; {
-			if edge.Type == voronoi.LineSegment {
-				va := voronoiVertexToVec2(edge.P1)
-				vb := voronoiVertexToVec2(edge.P2)
-				vs = append(vs,
-					Vertex{Position: site, Color: color},
-					Vertex{Position: va},
-					Vertex{Position: vb},
-				)
-			}
-			edge = edge.Next
-			if edge == cell.Edges {
-				break
-			}
-		}
+		vs = append(vs,
+			Vertex{Position: mgl32.Vec2{p, .5}, Color: color},
+			Vertex{Position: mgl32.Vec2{p + .02, .5}},
+			Vertex{Position: mgl32.Vec2{p, 1}},
+
+			Vertex{Position: mgl32.Vec2{p, .5}, Color: color},
+			Vertex{Position: mgl32.Vec2{p, 1}},
+			Vertex{Position: mgl32.Vec2{p - .02, .5}},
+
+			Vertex{Position: mgl32.Vec2{p, .5}, Color: color},
+			Vertex{Position: mgl32.Vec2{p - .02, .5}},
+			Vertex{Position: mgl32.Vec2{p, 0}},
+
+			Vertex{Position: mgl32.Vec2{p, .5}, Color: color},
+			Vertex{Position: mgl32.Vec2{p, 0}},
+			Vertex{Position: mgl32.Vec2{p + .02, .5}},
+		)
 	}
 	buffer := NewVertexBuffer(k.glctx, gl.TRIANGLES, vs)
 
@@ -136,128 +68,150 @@ func (k *Keys) Draw() {
 	buffer.Release()
 }
 
-func voronoiVertexToVec2(v voronoi.Point) mgl32.Vec2 {
-	return mgl32.Vec2{float32(v.X), float32(v.Y)}
-}
-
-func (k *Keys) Update() {
-	const attack, release = 4.0, 8.0
-	dt := time.Now().Sub(k.lastTime).Seconds()
-	k.lastTime = time.Now()
-
-	pMax := ratio{}
-	aMax := 0.0
-	for p, a := range k.recent {
-		if a > aMax {
-			aMax = a
-			pMax = p
-		}
-	}
-
-	for p := range k.recent {
-		d := dt / attack
-		if k.pressed[p] == nil && !(len(k.pressed) == 0 && p == pMax) {
-			d = -dt / release
-		}
-		k.recent[p] = math.Min(k.recent[p]+d, 1)
-		if k.recent[p] < 0 {
-			delete(k.recent, p)
-		}
-	}
-	k.buildDiagram()
-}
-
 func (k *Keys) Touch(e touch.Event) {
 	switch e.Type {
 	case touch.TypeBegin:
-		if pitch, ok := k.pitchForTouch(float64(e.X), float64(e.Y)); ok {
-			if k.pressed[pitch] == nil {
-				tone := NewTone(math.Log2(pitch.float()))
-				tones.AddTone(tone)
-				k.pressed[pitch] = &Key{map[touch.Sequence]struct{}{}, tone}
-				if _, ok := k.recent[pitch]; !ok {
-					k.recent[pitch] = 0
-				}
-			}
-			k.pressed[pitch].seqs[e.Sequence] = struct{}{}
+		key := k.keyAt(float64(e.X))
+		key.seqs[e.Sequence] = struct{}{}
+		if key.tone == nil {
+			k.pressed[key.pitch] = key
+			tone := NewTone(math.Log2(key.pitch.float()))
+			tones.AddTone(tone)
+			key.tone = tone
+			k.update()
+			// } else {
+			// 	key.tone.Release()
+			// 	key.tone = nil
+			// 	for seq := range key.seqs {
+			// 		delete(key.seqs, seq)
+			// 		delete(k.pressed, key.pitch)
+			// 	}
+			// 	k.update()
 		}
 	case touch.TypeEnd:
-		for pitch, key := range k.pressed {
-			delete(key.seqs, e.Sequence)
-			if len(key.seqs) == 0 {
-				key.tone.Release()
-				delete(k.pressed, pitch)
+		var key *Key
+		for _, k := range k.pressed {
+			if _, ok := k.seqs[e.Sequence]; ok {
+				key = k
+				break
 			}
+		}
+		delete(key.seqs, e.Sequence)
+		if len(key.seqs) == 0 {
+			delete(k.pressed, key.pitch)
+			key.tone.Release()
+			key.tone = nil
+			k.update()
+		}
+	}
+}
+
+func (k *Keys) keyAt(x float64) *Key {
+	freq := math.Exp2(x)
+	i := sort.Search(len(k.keys), func(i int) bool { return k.keys[i].pitch.float() >= freq })
+	if i == len(k.keys) {
+		return k.keys[len(k.keys)-1]
+	}
+	if i == 0 {
+		return k.keys[0]
+	}
+	if freq/k.keys[i-1].pitch.float() < k.keys[i].pitch.float()/freq {
+		return k.keys[i-1]
+	}
+	return k.keys[i]
+}
+
+func (k *Keys) update() {
+	if len(k.pressed) == 0 {
+		k.keys = []*Key{{
+			pitch: ratio{256, 1},
+			seqs:  map[touch.Sequence]struct{}{},
+		}}
+		return
+	}
+
+	pitches := []ratio{}
+	pitch := ratio{}
+	for _, key := range k.pressed {
+		pitch = key.pitch
+		break
+	}
+
+	pow := func(a, x int) int {
+		y := 1
+		for x > 0 {
+			y *= a
+			x--
+		}
+		return y
+	}
+	mul := func(n, d, a, x int) (int, int) {
+		if x > 0 {
+			return n * pow(a, x), d
+		}
+		return n, d * pow(a, -x)
+	}
+threes:
+	for _, three := range []int{-2, -1, 0, 1, 2} {
+	fives:
+		for _, five := range []int{-1, 0, 1} {
+			n, d := 1, 1
+			n, d = mul(n, d, 3, three)
+			n, d = mul(n, d, 5, five)
+			p2 := pitch.mul(ratio{n, d})
+			for p := range k.pressed {
+				three, five := factorize(p2.div(p))
+				if three > 2 {
+					continue threes
+				}
+				if five > 1 {
+					continue fives
+				}
+			}
+			pitches = append(pitches, p2)
+		}
+	}
+
+	for _, p := range pitches {
+		for p := p.mul(ratio{2, 1}); p.less(ratio{1 << 10, 1}); p = p.mul(ratio{2, 1}) {
+			pitches = append(pitches, p)
+		}
+		for p := p.mul(ratio{1, 2}); !p.less(ratio{1, 1 << 7}); p = p.mul(ratio{1, 2}) {
+			pitches = append(pitches, p)
+		}
+	}
+
+	k.keys = nil
+	sort.Slice(pitches, func(i, j int) bool { return pitches[i].less(pitches[j]) })
+	for _, p := range pitches {
+		if key, ok := k.pressed[p]; ok {
+			k.keys = append(k.keys, key)
+		} else {
+			k.keys = append(k.keys, &Key{
+				pitch: p,
+				seqs:  map[touch.Sequence]struct{}{},
+			})
 		}
 	}
 }
 
 type Key struct {
-	seqs map[touch.Sequence]struct{}
-	tone *Tone
+	pitch ratio
+	seqs  map[touch.Sequence]struct{}
+	tone  *Tone
 }
 
-func (k *Keys) pitchForTouch(x, y float64) (ratio, bool) {
-	if cell := k.diagram.Find(voronoi.Point{x, y}); cell != nil {
-		return k.pitchToRatio[cell.Site.X], true
+func factorize(r ratio) (threes, fives int) {
+	n := r.a * r.b
+	for n%3 == 0 {
+		n /= 3
+		threes++
 	}
-	return ratio{}, false
-}
-
-func dissonance(a1, a2, p1, p2 float64) float64 {
-	// f1 := math.Exp2(p1)
-	// f2 := math.Exp2(p2)
-	// // m := (a1*f1 + a2*f2) / (a1 + a2)
-	// m := 1. //math.Pow(math.Pow(f1, a1)*math.Pow(f2, a2), 1/(a1+a2))
-	// df := math.Abs(f2 - f1)
-	// return m * df * math.Exp(-df/64)
-
-	dp := math.Abs(p2 - p1)
-	x := 20 * dp
-	// x := dp * dp * 400
-	return x * math.Exp(-x) * math.E
-}
-
-func beatAmplitude(a1, a2 float64) float64 {
-	// return math.Min(a1, a2)
-	// return a1 * a2 * math.Hypot(a1, a2)
-	// return math.Hypot(a1, a2)
-
-	// Avoid floating point rounding errors.
-	if math.Abs(math.Log10(a1/a2)) > 10 {
-		return math.Min(a1, a2)
+	for n%5 == 0 {
+		n /= 5
+		fives++
 	}
-
-	meanSquare := a1*a1 + a2*a2
-
-	m := math.Max(0, math.Min(1, 4*a1*a2/((a1+a2)*(a1+a2)))) // TODO: better math, not max/min
-	squareMean := (a1 + a2) * completeE(m) / (math.Pi / 2)
-	squareMean *= squareMean
-
-	stddev := math.Sqrt(math.Max(0, meanSquare-squareMean))
-	return stddev
-}
-
-func completeE(m float64) float64 {
-	if m == 1 {
-		return 1
-	}
-	i, f := math.Modf(m * float64(len(completeE_)))
-	i0 := int(i)
-	e0 := completeE_[i0]
-	e1 := 1.0
-	if i1 := i0 + 1; i1 < len(completeE_) {
-		e1 = completeE_[i1]
-	}
-	return e0*(1-f) + e1*f
-}
-
-var completeE_ [1024]float64
-
-func init() {
-	for i := range completeE_ {
-		completeE_[i] = mathext.CompleteE(float64(i) / float64(len(completeE_)))
-	}
+	return
 }
 
 func gcd(a, b int) int {
@@ -287,36 +241,3 @@ func (r ratio) div(s ratio) ratio { return r.mul(ratio{s.b, s.a}) }
 
 func (r ratio) less(s ratio) bool { return r.a*s.b < s.a*r.b }
 func (r ratio) float() float64    { return float64(r.a) / float64(r.b) }
-
-var rats []ratio
-
-func init() {
-	pow := func(a, x int) int {
-		y := 1
-		for x > 0 {
-			y *= a
-			x--
-		}
-		return y
-	}
-	mul := func(n, d, a, x int) (int, int) {
-		if x > 0 {
-			return n * pow(a, x), d
-		}
-		return n, d * pow(a, -x)
-	}
-	for _, two := range []int{-3, -2, -1, 0, 1, 2, 3} {
-		for _, three := range []int{-2, -1, 0, 1, 2} {
-			for _, five := range []int{-1, 0, 1} {
-				for _, seven := range []int{-1, 0, 1} {
-					n, d := 1, 1
-					n, d = mul(n, d, 2, two)
-					n, d = mul(n, d, 3, three)
-					n, d = mul(n, d, 5, five)
-					n, d = mul(n, d, 7, seven)
-					rats = append(rats, ratio{n, d})
-				}
-			}
-		}
-	}
-}

@@ -7,6 +7,28 @@ import (
 	"github.com/gordonklaus/audio"
 )
 
+const (
+	tonicPitch            = 8
+	harmonicAmplitudeBase = .88
+	numHarmonics          = 12
+)
+
+type harmonic struct {
+	ratio, pitch, amplitude float64
+}
+
+var harmonics []harmonic
+
+func init() {
+	for i := 1.0; i <= numHarmonics; i++ {
+		harmonics = append(harmonics, harmonic{
+			ratio:     i,
+			pitch:     math.Log2(i),
+			amplitude: math.Pow(harmonicAmplitudeBase, i) * (1 - harmonicAmplitudeBase),
+		})
+	}
+}
+
 var (
 	tones       Tones
 	playControl audio.PlayControl

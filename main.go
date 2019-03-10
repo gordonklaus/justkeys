@@ -2,7 +2,6 @@ package main
 
 import (
 	"log"
-	"math"
 
 	"golang.org/x/mobile/app"
 	"golang.org/x/mobile/event/lifecycle"
@@ -11,47 +10,6 @@ import (
 	"golang.org/x/mobile/event/touch"
 	"golang.org/x/mobile/gl"
 )
-
-const (
-	tonicPitch            = 8
-	harmonicAmplitudeBase = .88
-	numHarmonics          = 12
-)
-
-type harmonic struct {
-	ratio, pitch, amplitude float64
-}
-
-var harmonics []harmonic
-
-func init() {
-	for i := 1.0; i <= numHarmonics; i++ {
-		harmonics = append(harmonics, harmonic{
-			ratio:     i,
-			pitch:     math.Log2(i),
-			amplitude: math.Pow(harmonicAmplitudeBase, i) * (1 - harmonicAmplitudeBase),
-		})
-	}
-}
-
-type pitchAmplitude struct {
-	freq      ratio
-	pitch     float64
-	amplitude float64
-}
-
-func totalDissonance(pitch float64, playing []pitchAmplitude) float64 {
-	d := 0.0
-	for _, playing := range playing {
-		for _, h1 := range harmonics {
-			a1 := h1.amplitude * playing.amplitude
-			for _, h2 := range harmonics {
-				d += beatAmplitude(a1, h2.amplitude) * dissonance(a1, h2.amplitude, playing.pitch+h1.pitch, pitch+h2.pitch)
-			}
-		}
-	}
-	return d
-}
 
 func main() {
 	app.Main(func(a app.App) {
@@ -84,13 +42,15 @@ func main() {
 
 				onPaint(glctx, sz)
 				a.Publish()
-				a.Send(paint.Event{})
 			case touch.Event:
 				clipX := 2*e.X/float32(sz.WidthPx) - 1
 				clipY := 1 - 2*e.Y/float32(sz.HeightPx)
 				e.X, e.Y = program.Clip2World(clipX, clipY)
 
 				keys.Touch(e)
+				if e.Type != touch.TypeMove {
+					a.Send(paint.Event{})
+				}
 			}
 		}
 	})
@@ -125,6 +85,8 @@ func onPaint(glctx gl.Context, sz size.Event) {
 	glctx.ClearColor(0, 0, 0, 1)
 	glctx.Clear(gl.COLOR_BUFFER_BIT)
 
-	keys.Update()
+	glctx.Enable(gl.BLEND)
+	glctx.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+
 	keys.Draw()
 }
