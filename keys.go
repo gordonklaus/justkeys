@@ -9,6 +9,8 @@ import (
 	"golang.org/x/mobile/gl"
 )
 
+const tonicPitch = 7
+
 type Keys struct {
 	glctx   gl.Context
 	program *Program
@@ -23,7 +25,7 @@ func NewKeys(glctx gl.Context, program *Program) *Keys {
 		program: program,
 		pressed: map[ratio]*Key{},
 		keys: []*Key{{
-			pitch: ratio{256, 1},
+			pitch: ratio{1 << tonicPitch, 1},
 			seqs:  map[touch.Sequence]struct{}{},
 		}},
 	}
@@ -69,6 +71,20 @@ func (k *Keys) Draw() {
 }
 
 func (k *Keys) Touch(e touch.Event) {
+	if e.Y > .85 {
+		tones.mu.Lock()
+		pmIndex = math.Max(0, math.Min(.97, float64(e.X-tonicPitch)))
+		for _, t := range tones.MultiVoice.Voices {
+			t.(*Tone).mu.Lock()
+			for _, o := range t.(*Tone).Osc {
+				o.Index(pmIndex)
+			}
+			t.(*Tone).mu.Unlock()
+		}
+		tones.mu.Unlock()
+		return
+	}
+
 	switch e.Type {
 	case touch.TypeBegin:
 		key := k.keyAt(float64(e.X))
@@ -124,7 +140,7 @@ func (k *Keys) keyAt(x float64) *Key {
 func (k *Keys) update() {
 	if len(k.pressed) == 0 {
 		k.keys = []*Key{{
-			pitch: ratio{256, 1},
+			pitch: ratio{1 << tonicPitch, 1},
 			seqs:  map[touch.Sequence]struct{}{},
 		}}
 		return

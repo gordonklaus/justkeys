@@ -2,32 +2,11 @@ package main
 
 import (
 	"math"
+	"math/rand"
 	"sync"
 
 	"github.com/gordonklaus/audio"
 )
-
-const (
-	tonicPitch            = 8
-	harmonicAmplitudeBase = .88
-	numHarmonics          = 12
-)
-
-type harmonic struct {
-	ratio, pitch, amplitude float64
-}
-
-var harmonics []harmonic
-
-func init() {
-	for i := 1.0; i <= numHarmonics; i++ {
-		harmonics = append(harmonics, harmonic{
-			ratio:     i,
-			pitch:     math.Log2(i),
-			amplitude: math.Pow(harmonicAmplitudeBase, i) * (1 - harmonicAmplitudeBase),
-		})
-	}
-}
 
 var (
 	tones       Tones
@@ -58,7 +37,7 @@ func (t *Tones) AddTone(v *Tone) {
 
 func (t *Tones) Sing() float64 {
 	x := t.MultiVoice.Sing() / 8
-	return (3*x + t.Reverb.Filter(x)) / 4
+	return (4*x + t.Reverb.Filter(x)) / 5
 }
 
 func (t *Tones) Done() bool {
@@ -66,19 +45,19 @@ func (t *Tones) Done() bool {
 }
 
 type Tone struct {
-	mu        sync.Mutex
-	Harmonics []*ToneHarmonic
-	Amp       audio.Control
+	mu  sync.Mutex
+	Osc []*audio.SineSelfPM
+	Amp audio.Control
 }
 
+var pmIndex = .8
+
 func NewTone(pitch float64) *Tone {
-	ToneHarmonics := make([]*ToneHarmonic, len(harmonics))
-	for i, h := range harmonics {
-		ToneHarmonics[i] = NewToneHarmonic(h)
+	t := &Tone{}
+	for i := 0; i < 12; i++ {
+		t.Osc = append(t.Osc, new(audio.SineSelfPM).Index(pmIndex).Freq(math.Exp2(pitch+rand.NormFloat64()/256)))
 	}
-	t := &Tone{Harmonics: ToneHarmonics}
-	t.SetPitch(pitch)
-	t.Amp.SetPoints([]*audio.ControlPoint{{0, -12}, {.05, 0}, {99999, 0}})
+	t.Amp.SetPoints([]*audio.ControlPoint{{0, -12}, {.03, 0}, {.18, -.5}, {99999, -1}})
 	return t
 }
 
@@ -89,42 +68,16 @@ func (t *Tone) Release() {
 	t.mu.Unlock()
 }
 
-func (t *Tone) SetPitch(p float64) {
-	freq := math.Exp2(p)
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	for _, h := range t.Harmonics {
-		h.SetFreq(freq)
-	}
-}
-
 func (t *Tone) Sing() float64 {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	x := 0.0
-	for i := range t.Harmonics {
-		x += t.Harmonics[i].Sing()
+	for _, o := range t.Osc {
+		x += o.Sing()
 	}
-	return math.Exp2(t.Amp.Sing()) * x
+	return math.Exp2(t.Amp.Sing()) * x / float64(len(t.Osc))
 }
 
 func (t *Tone) Done() bool {
 	return t.Amp.Done()
-}
-
-type ToneHarmonic struct {
-	harmonic harmonic
-	Sine     audio.SineOsc
-}
-
-func NewToneHarmonic(h harmonic) *ToneHarmonic {
-	return &ToneHarmonic{harmonic: h}
-}
-
-func (h *ToneHarmonic) SetFreq(freq float64) {
-	h.Sine.Freq(freq * h.harmonic.ratio)
-}
-
-func (h *ToneHarmonic) Sing() float64 {
-	return h.harmonic.amplitude * h.Sine.Sing()
 }
