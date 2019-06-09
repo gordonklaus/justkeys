@@ -14,7 +14,6 @@ var (
 )
 
 func startAudio() {
-	tones.Reverb = audio.NewReverb()
 	playControl = audio.PlayAsync(&tones)
 }
 
@@ -25,7 +24,7 @@ func stopAudio() {
 type Tones struct {
 	mu         sync.Mutex
 	MultiVoice audio.MultiVoice
-	Reverb     *audio.Reverb
+	Reverb     [2]audio.Reverb
 }
 
 func (t *Tones) AddTone(v *Tone) {
@@ -35,9 +34,11 @@ func (t *Tones) AddTone(v *Tone) {
 	t.MultiVoice.Add(v)
 }
 
-func (t *Tones) Sing() float64 {
+func (t *Tones) Sing() (float64, float64) {
 	x := t.MultiVoice.Sing() / 8
-	return (4*x + t.Reverb.Filter(x)) / 5
+	l := audio.Crossfade(x, .2, t.Reverb[0].Filter(x))
+	r := audio.Crossfade(x, .2, t.Reverb[1].Filter(x))
+	return l, r
 }
 
 func (t *Tones) Done() bool {
