@@ -5,114 +5,135 @@ import (
 	"sort"
 
 	"github.com/go-gl/mathgl/mgl32"
-	"golang.org/x/mobile/event/touch"
-	"golang.org/x/mobile/gl"
+	"github.com/gordonklaus/ui"
 )
 
 const tonicPitch = 7
 
-type Keys struct {
-	glctx   gl.Context
-	program *Program
+type Keyboard struct {
+	ui.View
+
+	buf *ui.TriangleBuffer
 
 	keys    []*Key
 	pressed map[ratio]*Key
 }
 
-func NewKeys(glctx gl.Context, program *Program) *Keys {
-	k := &Keys{
-		glctx:   glctx,
-		program: program,
+func NewKeyboard() *Keyboard {
+	k := &Keyboard{
 		pressed: map[ratio]*Key{},
 		keys: []*Key{{
 			pitch: ratio{1 << tonicPitch, 1},
-			seqs:  map[touch.Sequence]struct{}{},
+			seqs:  map[ui.PointerID]struct{}{},
 		}},
 	}
+	k.View = ui.NewView(k)
 	return k
 }
 
-func (k *Keys) Release() {
+func (k *Keyboard) Release() {
 	// k.buffer.Release()
 }
 
-func (k *Keys) Draw() {
-	vs := []Vertex{}
+func (k *Keyboard) Draw(gfx *ui.Graphics) {
+	black := ui.Color{}
+
+	ts := []ui.Triangle{}
 	for _, key := range k.keys {
-		p := float32(math.Log2(key.pitch.float()))
-		color := mgl32.Vec4{.3, .3, .3, 1}
+		p := math.Log2(key.pitch.float())
+		color := ui.Color{.3, .3, .3, 1}
 		if key.tone != nil {
-			color = mgl32.Vec4{.6, .6, .6, 1}
+			color = ui.Color{.6, .6, .6, 1}
 		}
-		vs = append(vs,
-			Vertex{Position: mgl32.Vec2{p, .5}, Color: color},
-			Vertex{Position: mgl32.Vec2{p + .02, .5}},
-			Vertex{Position: mgl32.Vec2{p, 1}},
-
-			Vertex{Position: mgl32.Vec2{p, .5}, Color: color},
-			Vertex{Position: mgl32.Vec2{p, 1}},
-			Vertex{Position: mgl32.Vec2{p - .02, .5}},
-
-			Vertex{Position: mgl32.Vec2{p, .5}, Color: color},
-			Vertex{Position: mgl32.Vec2{p - .02, .5}},
-			Vertex{Position: mgl32.Vec2{p, 0}},
-
-			Vertex{Position: mgl32.Vec2{p, .5}, Color: color},
-			Vertex{Position: mgl32.Vec2{p, 0}},
-			Vertex{Position: mgl32.Vec2{p + .02, .5}},
-		)
+		ts = append(ts, []ui.Triangle{{
+			k.vertex(p, .5, color),
+			k.vertex(p+.02, .5, black),
+			k.vertex(p, 1, black),
+		}, {
+			k.vertex(p, .5, color),
+			k.vertex(p, 1, black),
+			k.vertex(p-.02, .5, black),
+		}, {
+			k.vertex(p, .5, color),
+			k.vertex(p-.02, .5, black),
+			k.vertex(p, 0, black),
+		}, {
+			k.vertex(p, .5, color),
+			k.vertex(p, 0, black),
+			k.vertex(p+.02, .5, black),
+		}}...)
 	}
-	buffer := NewVertexBuffer(k.glctx, gl.TRIANGLES, vs)
+	k.buf = ui.NewTriangleBuffer(ts)
 
-	k.glctx.LineWidth(1)
-	k.program.Draw(buffer, mgl32.Ident4())
+	gfx.Draw(k.buf, mgl32.Ident4())
 
-	buffer.Release()
+	k.buf.Release()
 }
 
-func (k *Keys) Touch(e touch.Event) {
-	if e.Y > .85 {
-		tones.mu.Lock()
-		pmIndex = math.Max(0, math.Min(.97, float64(e.X-tonicPitch)))
-		for _, t := range tones.MultiVoice.Voices {
-			t.(*Tone).mu.Lock()
-			for _, o := range t.(*Tone).Osc {
-				o.Index(pmIndex)
-			}
-			t.(*Tone).mu.Unlock()
-		}
-		tones.mu.Unlock()
+const octaveWidth = 165
+
+func (k *Keyboard) freqToX(freq float64) float64 {
+	octaves := k.Width() / octaveWidth
+	minFreq := tonicPitch - octaves/2
+	return k.Width() * (freq - minFreq) / octaves
+}
+
+func (k *Keyboard) xToFreq(x float64) float64 {
+	octaves := k.Width() / octaveWidth
+	minFreq := tonicPitch - octaves/2
+	return minFreq + octaves*x/k.Width()
+}
+
+func (k *Keyboard) vertex(freq, y float64, color ui.Color) ui.Vertex {
+	x := k.freqToX(freq)
+	y *= k.Height()
+	return ui.Vertex{Position: ui.Position{x, y}, Color: color}
+}
+
+func (k *Keyboard) PointerDown(p ui.Pointer) {
+	if k.pmIndex(p) {
 		return
 	}
 
-	switch e.Type {
-	case touch.TypeBegin:
-		key := k.keyAt(float64(e.X))
-		key.seqs[e.Sequence] = struct{}{}
-		if key.tone == nil {
-			k.pressed[key.pitch] = key
-			tone := NewTone(math.Log2(key.pitch.float()))
-			tones.AddTone(tone)
-			key.tone = tone
-			k.update()
-			// } else {
-			// 	key.tone.Release()
-			// 	key.tone = nil
-			// 	for seq := range key.seqs {
-			// 		delete(key.seqs, seq)
-			// 		delete(k.pressed, key.pitch)
-			// 	}
-			// 	k.update()
+	key := k.keyAt(float64(p.X))
+	key.seqs[p.ID] = struct{}{}
+	if key.tone == nil {
+		k.pressed[key.pitch] = key
+		tone := NewTone(math.Log2(key.pitch.float()))
+		tones.AddTone(tone)
+		key.tone = tone
+		k.update()
+	} else if p.Type.Mouse() {
+		key.tone.Release()
+		key.tone = nil
+		for seq := range key.seqs {
+			delete(key.seqs, seq)
+			delete(k.pressed, key.pitch)
 		}
-	case touch.TypeEnd:
-		var key *Key
-		for _, k := range k.pressed {
-			if _, ok := k.seqs[e.Sequence]; ok {
-				key = k
-				break
-			}
+		k.update()
+	}
+}
+
+func (k *Keyboard) PointerMove(p ui.Pointer) {
+	if k.pmIndex(p) {
+		return
+	}
+}
+
+func (k *Keyboard) PointerUp(p ui.Pointer) {
+	if k.pmIndex(p) {
+		return
+	}
+
+	if p.Type.Mouse() {
+		return
+	}
+
+	for _, key := range k.pressed {
+		if _, ok := key.seqs[p.ID]; !ok {
+			continue
 		}
-		delete(key.seqs, e.Sequence)
+		delete(key.seqs, p.ID)
 		if len(key.seqs) == 0 {
 			delete(k.pressed, key.pitch)
 			key.tone.Release()
@@ -122,8 +143,25 @@ func (k *Keys) Touch(e touch.Event) {
 	}
 }
 
-func (k *Keys) keyAt(x float64) *Key {
-	freq := math.Exp2(x)
+func (k *Keyboard) pmIndex(p ui.Pointer) bool {
+	if p.Y/k.Height() > .85 {
+		tones.mu.Lock()
+		pmIndex = math.Max(0, math.Min(.97, p.X/k.Width()))
+		for _, t := range tones.MultiVoice.Voices {
+			t.(*Tone).mu.Lock()
+			for _, o := range t.(*Tone).Osc {
+				o.Index(pmIndex)
+			}
+			t.(*Tone).mu.Unlock()
+		}
+		tones.mu.Unlock()
+		return true
+	}
+	return false
+}
+
+func (k *Keyboard) keyAt(x float64) *Key {
+	freq := math.Exp2(k.xToFreq(x))
 	i := sort.Search(len(k.keys), func(i int) bool { return k.keys[i].pitch.float() >= freq })
 	if i == len(k.keys) {
 		return k.keys[len(k.keys)-1]
@@ -137,12 +175,13 @@ func (k *Keys) keyAt(x float64) *Key {
 	return k.keys[i]
 }
 
-func (k *Keys) update() {
+func (k *Keyboard) update() {
 	if len(k.pressed) == 0 {
 		k.keys = []*Key{{
 			pitch: ratio{1 << tonicPitch, 1},
-			seqs:  map[touch.Sequence]struct{}{},
+			seqs:  map[ui.PointerID]struct{}{},
 		}}
+		k.Redraw()
 		return
 	}
 
@@ -205,15 +244,17 @@ threes:
 		} else {
 			k.keys = append(k.keys, &Key{
 				pitch: p,
-				seqs:  map[touch.Sequence]struct{}{},
+				seqs:  map[ui.PointerID]struct{}{},
 			})
 		}
 	}
+
+	k.Redraw()
 }
 
 type Key struct {
 	pitch ratio
-	seqs  map[touch.Sequence]struct{}
+	seqs  map[ui.PointerID]struct{}
 	tone  *Tone
 }
 
