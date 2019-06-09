@@ -23,8 +23,8 @@ func NewKeyboard() *Keyboard {
 	k := &Keyboard{
 		pressed: map[ratio]*Key{},
 		keys: []*Key{{
-			pitch: ratio{1 << tonicPitch, 1},
-			seqs:  map[ui.PointerID]struct{}{},
+			freq:     ratio{1 << tonicPitch, 1},
+			pointers: map[ui.PointerID]struct{}{},
 		}},
 	}
 	k.View = ui.NewView(k)
@@ -40,7 +40,7 @@ func (k *Keyboard) Draw(gfx *ui.Graphics) {
 
 	ts := []ui.Triangle{}
 	for _, key := range k.keys {
-		p := math.Log2(key.pitch.float())
+		p := math.Log2(key.freq.float())
 		color := ui.Color{.3, .3, .3, 1}
 		if key.tone != nil {
 			color = ui.Color{.6, .6, .6, 1}
@@ -72,20 +72,20 @@ func (k *Keyboard) Draw(gfx *ui.Graphics) {
 
 const octaveWidth = 165
 
-func (k *Keyboard) freqToX(freq float64) float64 {
+func (k *Keyboard) pitchToX(pitch float64) float64 {
 	octaves := k.Width() / octaveWidth
-	minFreq := tonicPitch - octaves/2
-	return k.Width() * (freq - minFreq) / octaves
+	minPitch := tonicPitch - octaves/2
+	return k.Width() * (pitch - minPitch) / octaves
 }
 
-func (k *Keyboard) xToFreq(x float64) float64 {
+func (k *Keyboard) xToPitch(x float64) float64 {
 	octaves := k.Width() / octaveWidth
-	minFreq := tonicPitch - octaves/2
-	return minFreq + octaves*x/k.Width()
+	minPitch := tonicPitch - octaves/2
+	return minPitch + octaves*x/k.Width()
 }
 
-func (k *Keyboard) vertex(freq, y float64, color ui.Color) ui.Vertex {
-	x := k.freqToX(freq)
+func (k *Keyboard) vertex(pitch, y float64, color ui.Color) ui.Vertex {
+	x := k.pitchToX(pitch)
 	y *= k.Height()
 	return ui.Vertex{Position: ui.Position{x, y}, Color: color}
 }
@@ -95,20 +95,20 @@ func (k *Keyboard) PointerDown(p ui.Pointer) {
 		return
 	}
 
-	key := k.keyAt(float64(p.X))
-	key.seqs[p.ID] = struct{}{}
+	key := k.keyAt(p.X)
+	key.pointers[p.ID] = struct{}{}
 	if key.tone == nil {
-		k.pressed[key.pitch] = key
-		tone := NewTone(math.Log2(key.pitch.float()))
+		k.pressed[key.freq] = key
+		tone := NewTone(math.Log2(key.freq.float()))
 		tones.AddTone(tone)
 		key.tone = tone
 		k.update()
 	} else if p.Type.Mouse() {
 		key.tone.Release()
 		key.tone = nil
-		for seq := range key.seqs {
-			delete(key.seqs, seq)
-			delete(k.pressed, key.pitch)
+		for ptr := range key.pointers {
+			delete(key.pointers, ptr)
+			delete(k.pressed, key.freq)
 		}
 		k.update()
 	}
@@ -130,12 +130,12 @@ func (k *Keyboard) PointerUp(p ui.Pointer) {
 	}
 
 	for _, key := range k.pressed {
-		if _, ok := key.seqs[p.ID]; !ok {
+		if _, ok := key.pointers[p.ID]; !ok {
 			continue
 		}
-		delete(key.seqs, p.ID)
-		if len(key.seqs) == 0 {
-			delete(k.pressed, key.pitch)
+		delete(key.pointers, p.ID)
+		if len(key.pointers) == 0 {
+			delete(k.pressed, key.freq)
 			key.tone.Release()
 			key.tone = nil
 			k.update()
@@ -161,15 +161,15 @@ func (k *Keyboard) pmIndex(p ui.Pointer) bool {
 }
 
 func (k *Keyboard) keyAt(x float64) *Key {
-	freq := math.Exp2(k.xToFreq(x))
-	i := sort.Search(len(k.keys), func(i int) bool { return k.keys[i].pitch.float() >= freq })
+	freq := math.Exp2(k.xToPitch(x))
+	i := sort.Search(len(k.keys), func(i int) bool { return k.keys[i].freq.float() >= freq })
 	if i == len(k.keys) {
 		return k.keys[len(k.keys)-1]
 	}
 	if i == 0 {
 		return k.keys[0]
 	}
-	if freq/k.keys[i-1].pitch.float() < k.keys[i].pitch.float()/freq {
+	if freq/k.keys[i-1].freq.float() < k.keys[i].freq.float()/freq {
 		return k.keys[i-1]
 	}
 	return k.keys[i]
@@ -178,17 +178,17 @@ func (k *Keyboard) keyAt(x float64) *Key {
 func (k *Keyboard) update() {
 	if len(k.pressed) == 0 {
 		k.keys = []*Key{{
-			pitch: ratio{1 << tonicPitch, 1},
-			seqs:  map[ui.PointerID]struct{}{},
+			freq:     ratio{1 << tonicPitch, 1},
+			pointers: map[ui.PointerID]struct{}{},
 		}}
 		k.Redraw()
 		return
 	}
 
-	pitches := []ratio{}
-	pitch := ratio{}
+	freqs := []ratio{}
+	freq := ratio{}
 	for _, key := range k.pressed {
-		pitch = key.pitch
+		freq = key.freq
 		break
 	}
 
@@ -213,9 +213,9 @@ threes:
 			n, d := 1, 1
 			n, d = mul(n, d, 3, three)
 			n, d = mul(n, d, 5, five)
-			p2 := pitch.mul(ratio{n, d})
-			for p := range k.pressed {
-				three, five := factorize(p2.div(p))
+			f2 := freq.mul(ratio{n, d})
+			for f := range k.pressed {
+				three, five := factorize(f2.div(f))
 				if three > 2 {
 					continue threes
 				}
@@ -223,28 +223,28 @@ threes:
 					continue fives
 				}
 			}
-			pitches = append(pitches, p2)
+			freqs = append(freqs, f2)
 		}
 	}
 
-	for _, p := range pitches {
-		for p := p.mul(ratio{2, 1}); p.less(ratio{1 << 10, 1}); p = p.mul(ratio{2, 1}) {
-			pitches = append(pitches, p)
+	for _, f := range freqs {
+		for f := f.mul(ratio{2, 1}); f.less(ratio{1 << 10, 1}); f = f.mul(ratio{2, 1}) {
+			freqs = append(freqs, f)
 		}
-		for p := p.mul(ratio{1, 2}); !p.less(ratio{1, 1 << 7}); p = p.mul(ratio{1, 2}) {
-			pitches = append(pitches, p)
+		for f := f.mul(ratio{1, 2}); !f.less(ratio{1, 1 << 7}); f = f.mul(ratio{1, 2}) {
+			freqs = append(freqs, f)
 		}
 	}
 
 	k.keys = nil
-	sort.Slice(pitches, func(i, j int) bool { return pitches[i].less(pitches[j]) })
-	for _, p := range pitches {
-		if key, ok := k.pressed[p]; ok {
+	sort.Slice(freqs, func(i, j int) bool { return freqs[i].less(freqs[j]) })
+	for _, f := range freqs {
+		if key, ok := k.pressed[f]; ok {
 			k.keys = append(k.keys, key)
 		} else {
 			k.keys = append(k.keys, &Key{
-				pitch: p,
-				seqs:  map[ui.PointerID]struct{}{},
+				freq:     f,
+				pointers: map[ui.PointerID]struct{}{},
 			})
 		}
 	}
@@ -253,9 +253,9 @@ threes:
 }
 
 type Key struct {
-	pitch ratio
-	seqs  map[ui.PointerID]struct{}
-	tone  *Tone
+	freq     ratio
+	pointers map[ui.PointerID]struct{}
+	tone     *Tone
 }
 
 func factorize(r ratio) (threes, fives int) {
