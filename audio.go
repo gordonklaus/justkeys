@@ -24,18 +24,21 @@ func stopAudio() {
 type Tones struct {
 	mu         sync.Mutex
 	MultiVoice audio.MultiVoice
-	Reverb     [2]audio.Reverb
+
+	Reverb [2]audio.Reverb
 }
 
 func (t *Tones) AddTone(v *Tone) {
 	t.mu.Lock()
-	defer t.mu.Unlock()
-
 	t.MultiVoice.Add(v)
+	t.mu.Unlock()
 }
 
 func (t *Tones) Sing() (float64, float64) {
+	t.mu.Lock()
 	x := t.MultiVoice.Sing() / 8
+	t.mu.Unlock()
+
 	l := audio.Crossfade(x, .2, t.Reverb[0].Filter(x))
 	r := audio.Crossfade(x, .2, t.Reverb[1].Filter(x))
 	return l, r
@@ -47,18 +50,19 @@ func (t *Tones) Done() bool {
 
 type Tone struct {
 	mu  sync.Mutex
-	Osc []*audio.SineSelfPM
 	Amp audio.Control
+
+	Osc []*audio.SineSelfPM
 }
 
 var pmIndex = .8
 
 func NewTone(pitch float64) *Tone {
 	t := &Tone{}
+	t.Amp.SetPoints([]*audio.ControlPoint{{0, -12}, {.03, 0}, {.18, -.5}, {99999, -1}})
 	for i := 0; i < 12; i++ {
 		t.Osc = append(t.Osc, new(audio.SineSelfPM).Index(pmIndex).Freq(math.Exp2(pitch+rand.NormFloat64()/256)))
 	}
-	t.Amp.SetPoints([]*audio.ControlPoint{{0, -12}, {.03, 0}, {.18, -.5}, {99999, -1}})
 	return t
 }
 
@@ -71,14 +75,20 @@ func (t *Tone) Release() {
 
 func (t *Tone) Sing() float64 {
 	t.mu.Lock()
-	defer t.mu.Unlock()
+	a := t.Amp.Sing()
+	t.mu.Unlock()
+
 	x := 0.0
 	for _, o := range t.Osc {
 		x += o.Sing()
 	}
-	return math.Exp2(t.Amp.Sing()) * x / float64(len(t.Osc))
+	return math.Exp2(a) * x / float64(len(t.Osc))
 }
 
 func (t *Tone) Done() bool {
-	return t.Amp.Done()
+	t.mu.Lock()
+	done := t.Amp.Done()
+	t.mu.Unlock()
+
+	return done
 }
