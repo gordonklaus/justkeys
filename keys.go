@@ -10,24 +10,29 @@ import (
 
 const tonicPitch = 7
 
+const (
+	threes = 2
+	fives  = 1
+	sevens = 0
+)
+
 type Keyboard struct {
 	ui.View
 
 	buf *ui.TriangleBuffer
 
-	keys    []*Key
-	pressed map[ratio]*Key
+	keys         []*Key
+	pressed      map[ratio]*Key
+	lastReleased ratio
 }
 
 func NewKeyboard() *Keyboard {
 	k := &Keyboard{
-		pressed: map[ratio]*Key{},
-		keys: []*Key{{
-			freq:     ratio{1 << tonicPitch, 1},
-			pointers: map[ui.PointerID]struct{}{},
-		}},
+		pressed:      map[ratio]*Key{},
+		lastReleased: ratio{1 << tonicPitch, 1},
 	}
 	k.View = ui.NewView(k)
+	k.update()
 	return k
 }
 
@@ -106,6 +111,7 @@ func (k *Keyboard) PointerDown(p ui.Pointer) {
 	} else if p.Type.Mouse() {
 		key.tone.Release()
 		key.tone = nil
+		k.lastReleased = key.freq
 		for ptr := range key.pointers {
 			delete(key.pointers, ptr)
 			delete(k.pressed, key.freq)
@@ -138,6 +144,7 @@ func (k *Keyboard) PointerUp(p ui.Pointer) {
 			delete(k.pressed, key.freq)
 			key.tone.Release()
 			key.tone = nil
+			k.lastReleased = key.freq
 			k.update()
 		}
 	}
@@ -176,19 +183,15 @@ func (k *Keyboard) keyAt(x float64) *Key {
 }
 
 func (k *Keyboard) update() {
-	if len(k.pressed) == 0 {
-		k.keys = []*Key{{
-			freq:     ratio{1 << tonicPitch, 1},
-			pointers: map[ui.PointerID]struct{}{},
-		}}
-		k.Redraw()
-		return
+	anchors := k.pressed
+	if len(anchors) == 0 {
+		anchors = map[ratio]*Key{k.lastReleased: nil}
 	}
 
 	freqs := []ratio{}
 	freq := ratio{}
-	for _, key := range k.pressed {
-		freq = key.freq
+	for f := range anchors {
+		freq = f
 		break
 	}
 
@@ -207,23 +210,30 @@ func (k *Keyboard) update() {
 		return n, d * pow(a, -x)
 	}
 threes:
-	for _, three := range []int{-2, -1, 0, 1, 2} {
+	for three := -threes; three <= threes; three++ {
 	fives:
-		for _, five := range []int{-1, 0, 1} {
-			n, d := 1, 1
-			n, d = mul(n, d, 3, three)
-			n, d = mul(n, d, 5, five)
-			f2 := freq.mul(ratio{n, d})
-			for f := range k.pressed {
-				three, five := factorize(f2.div(f))
-				if three > 2 {
-					continue threes
+		for five := -fives; five <= fives; five++ {
+		sevens:
+			for seven := -sevens; seven <= sevens; seven++ {
+				n, d := 1, 1
+				n, d = mul(n, d, 3, three)
+				n, d = mul(n, d, 5, five)
+				n, d = mul(n, d, 7, seven)
+				f2 := freq.mul(ratio{n, d})
+				for f := range anchors {
+					three, five, seven := factorize(f2.div(f))
+					if three > threes {
+						continue threes
+					}
+					if five > fives {
+						continue fives
+					}
+					if seven > sevens {
+						continue sevens
+					}
 				}
-				if five > 1 {
-					continue fives
-				}
+				freqs = append(freqs, f2)
 			}
-			freqs = append(freqs, f2)
 		}
 	}
 
@@ -258,7 +268,7 @@ type Key struct {
 	tone     *Tone
 }
 
-func factorize(r ratio) (threes, fives int) {
+func factorize(r ratio) (threes, fives, sevens int) {
 	n := r.a * r.b
 	for n%3 == 0 {
 		n /= 3
@@ -267,6 +277,10 @@ func factorize(r ratio) (threes, fives int) {
 	for n%5 == 0 {
 		n /= 5
 		fives++
+	}
+	for n%7 == 0 {
+		n /= 7
+		sevens++
 	}
 	return
 }
