@@ -9,12 +9,7 @@ import (
 )
 
 const tonicPitch = 7
-
-const (
-	threes = 2
-	fives  = 1
-	sevens = 0
-)
+const maxRelativeRoughness = 2
 
 type Keyboard struct {
 	ui.View
@@ -46,27 +41,16 @@ func (k *Keyboard) Draw(gfx *ui.Graphics) {
 	ts := []ui.Triangle{}
 	for _, key := range k.keys {
 		p := math.Log2(key.freq.float())
+		y := key.y / maxRelativeRoughness
 		color := ui.Color{.3, .3, .3, 1}
 		if key.tone != nil {
 			color = ui.Color{.6, .6, .6, 1}
 		}
-		ts = append(ts, []ui.Triangle{{
-			k.vertex(p, .5, color),
-			k.vertex(p+.02, .5, black),
+		ts = append(ts, ui.Triangle{
+			k.vertex(p-.01, y, color),
+			k.vertex(p+.01, y, color),
 			k.vertex(p, 1, black),
-		}, {
-			k.vertex(p, .5, color),
-			k.vertex(p, 1, black),
-			k.vertex(p-.02, .5, black),
-		}, {
-			k.vertex(p, .5, color),
-			k.vertex(p-.02, .5, black),
-			k.vertex(p, 0, black),
-		}, {
-			k.vertex(p, .5, color),
-			k.vertex(p, 0, black),
-			k.vertex(p+.02, .5, black),
-		}}...)
+		})
 	}
 	k.buf = ui.NewTriangleBuffer(ts)
 
@@ -96,11 +80,15 @@ func (k *Keyboard) vertex(pitch, y float64, color ui.Color) ui.Vertex {
 }
 
 func (k *Keyboard) PointerDown(p ui.Pointer) {
+	if p.Type.Mouse() {
+		return
+	}
+
 	if k.pmIndex(p) {
 		return
 	}
 
-	key := k.keyAt(p.X)
+	key := k.keyAt(p.Position)
 	key.pointers[p.ID] = struct{}{}
 	if key.tone == nil {
 		k.pressed[key.freq] = key
@@ -121,17 +109,21 @@ func (k *Keyboard) PointerDown(p ui.Pointer) {
 }
 
 func (k *Keyboard) PointerMove(p ui.Pointer) {
+	if p.Type.Mouse() {
+		return
+	}
+
 	if k.pmIndex(p) {
 		return
 	}
 }
 
 func (k *Keyboard) PointerUp(p ui.Pointer) {
-	if k.pmIndex(p) {
+	if p.Type.Mouse() {
 		return
 	}
 
-	if p.Type.Mouse() {
+	if k.pmIndex(p) {
 		return
 	}
 
@@ -167,93 +159,127 @@ func (k *Keyboard) pmIndex(p ui.Pointer) bool {
 	return false
 }
 
-func (k *Keyboard) keyAt(x float64) *Key {
-	freq := math.Exp2(k.xToPitch(x))
+func (k *Keyboard) keyAt(p ui.Position) *Key {
+	freq := math.Exp2(k.xToPitch(p.X))
 	i := sort.Search(len(k.keys), func(i int) bool { return k.keys[i].freq.float() >= freq })
 	if i == len(k.keys) {
-		return k.keys[len(k.keys)-1]
+		i = len(k.keys) - 1
 	}
-	if i == 0 {
-		return k.keys[0]
+	if i > 0 && freq/k.keys[i-1].freq.float() < k.keys[i].freq.float()/freq {
+		i--
 	}
-	if freq/k.keys[i-1].freq.float() < k.keys[i].freq.float()/freq {
-		return k.keys[i-1]
+
+	iLeft := i
+	for iLeft > 0 && maxRelativeRoughness*p.Y/k.Height() < k.keys[iLeft].y {
+		iLeft--
 	}
-	return k.keys[i]
+	iRight := i
+	for iRight < len(k.keys) && maxRelativeRoughness*p.Y/k.Height() < k.keys[iRight].y {
+		iRight++
+	}
+	if iLeft < 0 {
+		if iRight >= len(k.keys) {
+			return nil
+		}
+		return k.keys[iRight]
+	}
+	if iRight >= len(k.keys) {
+		return k.keys[iLeft]
+	}
+	if freq/k.keys[iLeft].freq.float() < k.keys[iRight].freq.float()/freq {
+		return k.keys[iLeft]
+	}
+	return k.keys[iRight]
 }
 
 func (k *Keyboard) update() {
-	anchors := k.pressed
+	anchors := []ratio{}
+	isAnchor := func(r ratio) bool {
+		for _, s := range anchors {
+			if s == r {
+				return true
+			}
+		}
+		return false
+	}
+	for f := range k.pressed {
+		anchors = append(anchors, f)
+	}
 	if len(anchors) == 0 {
-		anchors = map[ratio]*Key{k.lastReleased: nil}
+		anchors = []ratio{k.lastReleased}
+	}
+	// fmt.Println(anchors)
+
+	type keyFreq struct {
+		freq ratio
+		y    float64
 	}
 
-	freqs := []ratio{}
-	freq := ratio{}
-	for f := range anchors {
-		freq = f
-		break
+	freqMap := map[ratio]keyFreq{}
+	A := make([]float64, 10)
+	for i := range A {
+		A[i] = 1 / float64(i+1)
 	}
-
-	pow := func(a, x int) int {
-		y := 1
-		for x > 0 {
-			y *= a
-			x--
+	anchorRoughness := roughness(A, ratioN(anchors)...)
+	add := func(f ratio) {
+		if x := k.pitchToX(math.Log2(f.float())); x < 0 || x > k.Width() {
+			return
 		}
-		return y
-	}
-	mul := func(n, d, a, x int) (int, int) {
-		if x > 0 {
-			return n * pow(a, x), d
+		if _, ok := freqMap[f]; ok {
+			return
 		}
-		return n, d * pow(a, -x)
-	}
-threes:
-	for three := -threes; three <= threes; three++ {
-	fives:
-		for five := -fives; five <= fives; five++ {
-		sevens:
-			for seven := -sevens; seven <= sevens; seven++ {
-				n, d := 1, 1
-				n, d = mul(n, d, 3, three)
-				n, d = mul(n, d, 5, five)
-				n, d = mul(n, d, 7, seven)
-				f2 := freq.mul(ratio{n, d})
-				for f := range anchors {
-					three, five, seven := factorize(f2.div(f))
-					if three > threes {
-						continue threes
-					}
-					if five > fives {
-						continue fives
-					}
-					if seven > sevens {
-						continue sevens
-					}
-				}
-				freqs = append(freqs, f2)
+		y := anchorRoughness
+		if !isAnchor(f) {
+			y = roughness(A, ratioN(append(anchors, f))...)
+		}
+		// fmt.Println(a, b, f, N, y)
+		if (y-anchorRoughness)/maxRelativeRoughness < 1 {
+			freqMap[f] = keyFreq{
+				freq: f,
+				y:    y,
 			}
 		}
 	}
 
-	for _, f := range freqs {
-		for f := f.mul(ratio{2, 1}); f.less(ratio{1 << 10, 1}); f = f.mul(ratio{2, 1}) {
-			freqs = append(freqs, f)
-		}
-		for f := f.mul(ratio{1, 2}); !f.less(ratio{1, 1 << 7}); f = f.mul(ratio{1, 2}) {
-			freqs = append(freqs, f)
+	for _, anchor := range anchors {
+		for b := 1; b <= 8; b++ {
+			for a := b; a <= 4*b; a++ {
+				if gcd(a, b) != 1 {
+					continue
+				}
+				add(anchor.mul(ratio{a, b}))
+				if !(a == 1 && b == 1) {
+					add(anchor.mul(ratio{b, a}))
+				}
+			}
 		}
 	}
 
+	freqs := make([]keyFreq, 0, len(freqMap))
+	for _, f := range freqMap {
+		freqs = append(freqs, f)
+	}
+	sort.Slice(freqs, func(i, j int) bool { return freqs[i].freq.less(freqs[j].freq) })
+
+	yMin := freqs[0].y
+	for i := range freqs {
+		if freqs[i].y < yMin {
+			yMin = freqs[i].y
+		}
+	}
+	for i := range freqs {
+		freqs[i].y -= yMin
+	}
+
 	k.keys = nil
-	sort.Slice(freqs, func(i, j int) bool { return freqs[i].less(freqs[j]) })
 	for _, f := range freqs {
-		if key, ok := k.pressed[f]; ok {
+		if key, ok := k.pressed[f.freq]; ok {
+			key.y = f.y
 			k.keys = append(k.keys, key)
 		} else {
 			k.keys = append(k.keys, &Key{
-				freq:     f,
+				freq:     f.freq,
+				y:        f.y,
 				pointers: map[ui.PointerID]struct{}{},
 			})
 		}
@@ -262,8 +288,22 @@ threes:
 	k.Redraw()
 }
 
+func ratioN(R []ratio) []int {
+	m := R[0].b
+	for _, r := range R[1:] {
+		m = lcm(m, r.b)
+	}
+
+	N := make([]int, len(R))
+	for i, r := range R {
+		N[i] = r.mul(ratio{m, 1}).a
+	}
+	return N
+}
+
 type Key struct {
 	freq     ratio
+	y        float64
 	pointers map[ui.PointerID]struct{}
 	tone     *Tone
 }
@@ -293,6 +333,11 @@ func gcd(a, b int) int {
 		a, b = b%a, a
 	}
 	return b
+}
+
+func lcm(a, b int) int {
+	_, _, gcd, a, b := gcd2(a, b)
+	return a * b * gcd
 }
 
 type ratio struct {
