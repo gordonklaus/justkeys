@@ -51,19 +51,33 @@ func (t *Tones) Done() bool {
 type Tone struct {
 	mu  sync.Mutex
 	Amp audio.Control
-
 	Osc []*audio.SineSelfPM
+
+	autoTone     *AutoTone
+	pitchOffsets []float64
 }
 
 var pmIndex = .8
 
-func NewTone(pitch float64) *Tone {
-	t := &Tone{}
+func NewTone(pitch float64, autoTone *AutoTone) *Tone {
+	t := &Tone{
+		autoTone: autoTone,
+	}
 	t.Amp.SetPoints([]*audio.ControlPoint{{0, -12}, {.03, 0}, {.18, -.5}, {99999, -1}})
 	for i := 0; i < 12; i++ {
-		t.Osc = append(t.Osc, new(audio.SineSelfPM).Index(pmIndex).Freq(math.Exp2(pitch+rand.NormFloat64()/256)))
+		offset := rand.NormFloat64() / 256
+		t.pitchOffsets = append(t.pitchOffsets, offset)
+		t.Osc = append(t.Osc, new(audio.SineSelfPM).Index(pmIndex).Freq(math.Exp2(pitch+offset)))
 	}
 	return t
+}
+
+func (t *Tone) SetPitch(p float64) {
+	t.mu.Lock()
+	for i, o := range t.Osc {
+		o.Freq(math.Exp2(p + t.pitchOffsets[i]))
+	}
+	t.mu.Unlock()
 }
 
 func (t *Tone) Release() {
