@@ -10,6 +10,7 @@ import (
 
 const tonicPitch = 7
 const maxRelativeRoughness = 2
+const maxY = .5
 
 type Keyboard struct {
 	ui.View
@@ -36,21 +37,58 @@ func (k *Keyboard) Release() {
 }
 
 func (k *Keyboard) Draw(gfx *ui.Graphics) {
-	black := ui.Color{}
+	borderColor := ui.Color{0, 0, 0, .5}
+	const b = 0.002
+
+	keys := make([]*Key, len(k.keys))
+	copy(keys, k.keys)
+	sort.Slice(keys, func(i, j int) bool { return keys[i].y < keys[j].y })
 
 	ts := []ui.Triangle{}
-	for _, key := range k.keys {
-		p := math.Log2(key.freq.float())
-		y := key.y / maxRelativeRoughness
-		color := ui.Color{.3, .3, .3, 1}
+	for _, key := range keys {
+		y := key.y
+		c := (1 - y/maxY)
+		color := ui.Color{c, c, c, 1}
 		if key.tone != nil {
-			color = ui.Color{.6, .6, .6, 1}
+			color = ui.Color{1, 1, 1, 1}
 		}
-		ts = append(ts, ui.Triangle{
-			k.vertex(p-.01, y, color),
-			k.vertex(p+.01, y, color),
-			k.vertex(p, 1, black),
-		})
+		ts = append(ts, []ui.Triangle{{ // body
+			k.vertex(key.left, y, color),
+			k.vertex(key.right, y, color),
+			k.vertex(key.right, maxY, borderColor),
+		}, {
+			k.vertex(key.left, y, color),
+			k.vertex(key.left, maxY, borderColor),
+			k.vertex(key.right, maxY, borderColor),
+		}, { // pitch indicator
+			k.vertex(key.pitch()-2*b, y+b, borderColor),
+			k.vertex(key.pitch()+2*b, y+b, borderColor),
+			k.vertex(key.pitch(), y+2.5*b, borderColor),
+		}, { // bottom border
+			k.vertex(key.left+b, y+b, borderColor),
+			k.vertex(key.right-b, y+b, borderColor),
+			k.vertex(key.right+b, y-b, borderColor),
+		}, {
+			k.vertex(key.left+b, y+b, borderColor),
+			k.vertex(key.right+b, y-b, borderColor),
+			k.vertex(key.left-b, y-b, borderColor),
+		}, { // left border
+			k.vertex(key.left+b, y+b, borderColor),
+			k.vertex(key.left+b, maxY+b, borderColor),
+			k.vertex(key.left-b, maxY-b, borderColor),
+		}, {
+			k.vertex(key.left+b, y+b, borderColor),
+			k.vertex(key.left-b, maxY-b, borderColor),
+			k.vertex(key.left-b, y-b, borderColor),
+		}, { // right border
+			k.vertex(key.right+b, y-b, borderColor),
+			k.vertex(key.right+b, maxY+b, borderColor),
+			k.vertex(key.right-b, maxY-b, borderColor),
+		}, {
+			k.vertex(key.right+b, y-b, borderColor),
+			k.vertex(key.right-b, maxY-b, borderColor),
+			k.vertex(key.right-b, y+b, borderColor),
+		}}...)
 	}
 	k.buf = ui.NewTriangleBuffer(ts)
 
@@ -170,11 +208,11 @@ func (k *Keyboard) keyAt(p ui.Position) *Key {
 	}
 
 	iLeft := i
-	for iLeft > 0 && maxRelativeRoughness*p.Y/k.Height() < k.keys[iLeft].y {
+	for iLeft > 0 && p.Y/k.Height() < k.keys[iLeft].y {
 		iLeft--
 	}
 	iRight := i
-	for iRight < len(k.keys) && maxRelativeRoughness*p.Y/k.Height() < k.keys[iRight].y {
+	for iRight < len(k.keys) && p.Y/k.Height() < k.keys[iRight].y {
 		iRight++
 	}
 	if iLeft < 0 {
@@ -233,10 +271,10 @@ func (k *Keyboard) update() {
 			y = roughness(A, ratioN(append(anchors, f))...)
 		}
 		// fmt.Println(a, b, f, N, y)
-		if (y-anchorRoughness)/maxRelativeRoughness < 1 {
+		if y := (y - anchorRoughness) / maxRelativeRoughness; y < 1 {
 			freqMap[f] = keyFreq{
 				freq: f,
-				y:    y,
+				y:    y * maxY,
 			}
 		}
 	}
@@ -261,16 +299,6 @@ func (k *Keyboard) update() {
 	}
 	sort.Slice(freqs, func(i, j int) bool { return freqs[i].freq.less(freqs[j].freq) })
 
-	yMin := freqs[0].y
-	for i := range freqs {
-		if freqs[i].y < yMin {
-			yMin = freqs[i].y
-		}
-	}
-	for i := range freqs {
-		freqs[i].y -= yMin
-	}
-
 	k.keys = nil
 	for _, f := range freqs {
 		if key, ok := k.pressed[f.freq]; ok {
@@ -284,6 +312,29 @@ func (k *Keyboard) update() {
 			})
 		}
 	}
+
+	for i, key := range k.keys {
+		key.right = key.pitch() + 10
+		for _, key2 := range k.keys[i+1:] {
+			if key2.y <= key.y {
+				key.right = (key.pitch() + key2.pitch()) / 2
+				break
+			}
+		}
+	}
+	k.keys[len(k.keys)-1].right = k.keys[len(k.keys)-1].pitch()
+	for i := len(k.keys) - 1; i > 0; i-- {
+		key := k.keys[i]
+		key.left = key.pitch() - 10
+		for j := i - 1; j >= 0; j-- {
+			key2 := k.keys[j]
+			if key2.y <= key.y {
+				key.left = (key.pitch() + key2.pitch()) / 2
+				break
+			}
+		}
+	}
+	k.keys[0].left = k.keys[0].pitch()
 
 	k.Redraw()
 }
@@ -302,11 +353,14 @@ func ratioN(R []ratio) []int {
 }
 
 type Key struct {
-	freq     ratio
-	y        float64
-	pointers map[ui.PointerID]struct{}
-	tone     *Tone
+	freq        ratio
+	y           float64
+	left, right float64
+	pointers    map[ui.PointerID]struct{}
+	tone        *Tone
 }
+
+func (k Key) pitch() float64 { return math.Log2(k.freq.float()) }
 
 func factorize(r ratio) (threes, fives, sevens int) {
 	n := r.a * r.b
