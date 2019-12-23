@@ -75,7 +75,7 @@ func (k *Keyboard) Draw(gfx *ui.Graphics) {
 			k.vertex(p, 1, black),
 		})
 	}
-	k.buf = ui.NewTriangleBuffer(ts)
+	k.buf = ui.NewTriangleBuffer(gfx, ts)
 
 	gfx.Draw(k.buf, mgl32.Ident4())
 
